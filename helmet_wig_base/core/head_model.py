@@ -38,27 +38,30 @@ def _lerp(a, b, t):
 
 
 def _width_profile(t):
-    """Width factor from ear level (t=0) to crown (t=1).
+    """Width factor across the full head height.
+
+    t can be negative (below ear level) or positive (above ear level).
+    t=0 is ear level, t=1 is crown.
 
     Returns 0..1 where 1 = full width.
 
-    Uses an elliptical curve: sqrt(1 - t^n). This is literally the
-    cross-section of an ellipsoid — full width at the bottom, curving
-    smoothly to 0 at the top, with the characteristic "steep sides
-    then rounded dome" shape of a real skull.
-
-    Higher exponent n → sides stay vertical longer before curving.
-    n=2.0 is a perfect circle. n=2.4 gives slightly more vertical sides.
+    Above ear level: elliptical curve sqrt(1 - t^2.4)
+    Below ear level: tapers inward (head narrows toward jaw/neck)
     """
+    if t < 0:
+        # Below ear level: taper inward. At t=-0.3 we're about 70% width.
+        return max(0.3, 1.0 + t * 1.0)  # linear taper below ears
     return math.sqrt(max(0.0, 1.0 - t ** 2.4))
 
 
 def _depth_profile(t):
-    """Depth factor from ear level (t=0) to crown (t=1).
+    """Depth factor across the full head height.
 
-    Slightly fuller than width (exponent 2.2 vs 2.4) since the head
-    is longer front-to-back.
+    Same as width but slightly fuller above ear level.
+    Below ear level: tapers less aggressively (back of head stays round).
     """
+    if t < 0:
+        return max(0.4, 1.0 + t * 0.8)
     return math.sqrt(max(0.0, 1.0 - t ** 2.2))
 
 
@@ -121,14 +124,18 @@ def generate_head_mesh(
     occipital_bump_strength = half_depth * 0.08
 
     # --- Generate vertex rings ---
+    # The mesh extends from below ear level (t_min) to crown (t=1).
+    # t=0 is ear-top level (Z=0), t<0 is below ears, t=1 is crown.
+    # This extra below-ear geometry lets the helmet edge extend down
+    # to cover the nape, ears, and occipital area.
+    t_min = -0.30  # 30% of head height below ear level
     vertex_coords = []
 
     for j in range(v_segments):
-        t = j / (v_segments - 1) if v_segments > 1 else 0.0
+        t = t_min + (1.0 - t_min) * (j / (v_segments - 1)) if v_segments > 1 else 0.0
 
-        # Linear height: evenly spaced rings from bottom to crown.
-        # The dome shape comes from the cosine width/depth profiles,
-        # not from bunching vertices at the top.
+        # Z position: t=0 → Z=0 (ear level), t=1 → Z=height (crown)
+        # t<0 → Z<0 (below ears)
         z = height * t
 
         # Profile factors at this height

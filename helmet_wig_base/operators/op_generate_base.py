@@ -27,14 +27,13 @@ def _edge_z_at_angle(angle, height, forehead_height_mm, edge_ratio):
     # front is at crown_z - forehead_height (roughly at the hairline).
     front_z = height - forehead_height_mm
 
-    # Side edge: just above ear-top level (Z=0). The ear-to-ear arc
-    # goes over the top, so the helmet should sit just above the ears.
-    # A small positive Z keeps it above the ear attachment point.
-    side_z = height * 0.08
+    # Side edge: slightly below ear-top level (Z=0).
+    # The helmet wraps just under the ears.
+    side_z = -height * 0.10
 
-    # Back edge: lower than sides — covers the occipital bump area.
-    # Typically about 15-20% of head height above ear level.
-    back_z = height * 0.03
+    # Back edge: extends well below ear level to cover the occipital
+    # bump and nape. This is the lowest point of the helmet.
+    back_z = -height * 0.20
 
     sin_a = math.sin(angle)
     cos_a = math.cos(angle)
