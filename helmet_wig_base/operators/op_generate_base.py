@@ -56,7 +56,6 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         # scan noise. Adjust if needed for very detailed/coarse scans.
         work.data.remesh_voxel_size = 1.5  # mm
         work.data.use_remesh_fix_poles = True
-        work.data.use_remesh_smooth_normals = True
         work.data.use_remesh_preserve_volume = True
         with bpy.context.temp_override(object=work, active_object=work):
             bpy.ops.object.voxel_remesh()
