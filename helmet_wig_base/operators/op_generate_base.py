@@ -1,21 +1,25 @@
 """Generate a helmet wig base shell from an imported head scan mesh.
 
-Pipeline:
-1. Duplicate the scan object as a working copy
-2. Clean the mesh (remove doubles, fix normals, delete loose geometry)
-3. Voxel remesh for a clean, uniform topology (critical for scan data)
-4. Smooth to remove remesh blockiness
-5. Bisect to cut the bottom (edge ratio controls how much to keep)
-6. Apply clearance offset via vertex normal displacement
-7. Apply shell thickness (Solidify modifier)
-8. Add rim band reinforcement along the bottom edge
-9. Recalculate normals
+Pipeline (Shrinkwrap approach):
+1. Compute scan bounding box to determine dome size
+2. Create a UV sphere sized to enclose the scan
+3. Bisect the sphere at edge_ratio height to create a dome
+4. Shrinkwrap the dome onto the scan surface (OUTSIDE mode + offset)
+5. Apply Smooth modifier to clean up Shrinkwrap artifacts
+6. Solidify for shell wall thickness
+7. Optional rim band
+8. Recalculate normals
+9. Clean up — delete the working scan copy
 
-The scan should already be in mm and centered (handled by the import operator).
+The Shrinkwrap approach is far more reliable than duplicating the scan
+mesh because it starts with clean topology (UV sphere) and projects it
+onto the scan. No issues with scan holes, bad normals, or non-manifold
+edges affecting the shell.
 """
 
 import bpy
 import bmesh
+import math
 from mathutils import Vector
 
 
@@ -28,57 +32,77 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.hwg
-        src = props.scan_object
+        scan = props.scan_object
 
-        if not src or src.type != 'MESH':
+        if not scan or scan.type != 'MESH':
             self.report({'ERROR'}, "Select a scan mesh object first.")
             return {'CANCELLED'}
 
-        # --- Duplicate working copy ---
-        work = src.copy()
-        work.data = src.data.copy()
-        work.name = f"{src.name}_HELMET_BASE"
-        context.collection.objects.link(work)
+        # --- Step 1: Prepare a clean scan target for Shrinkwrap ---
+        # Duplicate the scan and voxel remesh it so Shrinkwrap has a
+        # clean, watertight surface to project onto.
+        target = scan.copy()
+        target.data = scan.data.copy()
+        target.name = f"{scan.name}_SHRINK_TARGET"
+        context.collection.objects.link(target)
 
-        # Deselect all, select and activate working copy
         bpy.ops.object.select_all(action='DESELECT')
-        work.select_set(True)
-        context.view_layer.objects.active = work
+        target.select_set(True)
+        context.view_layer.objects.active = target
 
-        # --- Step 1: Clean the raw scan mesh ---
-        # Merge doubles, remove loose geometry, fix normals, and
-        # fill boundary holes so the mesh is watertight before remesh.
-        self._clean_mesh(work)
+        # Clean the mesh
+        self._clean_mesh(target)
 
-        # --- Step 2: Voxel remesh for uniform topology ---
-        # Raw scan meshes have inconsistent topology, holes, and
-        # non-manifold edges. Voxel remesh creates a clean, watertight
-        # mesh that Solidify can work with reliably.
-        # Voxel size of 1.5mm gives good detail while smoothing out
-        # scan noise. Adjust if needed for very detailed/coarse scans.
-        work.data.remesh_voxel_size = 1.5  # mm
-        work.data.use_remesh_fix_poles = True
-        work.data.use_remesh_preserve_volume = True
-        with bpy.context.temp_override(object=work, active_object=work):
+        # Voxel remesh for clean surface
+        target.data.remesh_voxel_size = 1.5
+        target.data.use_remesh_fix_poles = True
+        target.data.use_remesh_preserve_volume = True
+        with bpy.context.temp_override(object=target, active_object=target):
             bpy.ops.object.voxel_remesh()
 
-        # --- Step 3: Smooth to remove remesh blockiness ---
-        mod_smooth = work.modifiers.new("HWG_Smooth", 'SMOOTH')
+        # Smooth to remove remesh blockiness
+        mod_smooth = target.modifiers.new("HWG_Smooth", 'SMOOTH')
         mod_smooth.factor = 0.5
         mod_smooth.iterations = 5
-        with bpy.context.temp_override(object=work, active_object=work):
+        with bpy.context.temp_override(object=target, active_object=target):
             bpy.ops.object.modifier_apply(modifier=mod_smooth.name)
 
-        # --- Compute bounding box for edge cut ---
-        bbox = [work.matrix_world @ Vector(corner) for corner in work.bound_box]
-        z_vals = [v.z for v in bbox]
-        z_min, z_max = min(z_vals), max(z_vals)
-        height = max(0.001, z_max - z_min)
+        # --- Step 2: Compute bounding box ---
+        bbox = [target.matrix_world @ Vector(c) for c in target.bound_box]
+        xs = [v.x for v in bbox]
+        ys = [v.y for v in bbox]
+        zs = [v.z for v in bbox]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        z_min, z_max = min(zs), max(zs)
+
+        center_x = (x_min + x_max) / 2.0
+        center_y = (y_min + y_max) / 2.0
+        center_z = (z_min + z_max) / 2.0
+
+        # Sphere radius needs to enclose the scan with some margin
+        half_w = (x_max - x_min) / 2.0
+        half_d = (y_max - y_min) / 2.0
+        half_h = (z_max - z_min) / 2.0
+        radius = math.sqrt(half_w**2 + half_d**2 + half_h**2) * 1.1
+
+        height = z_max - z_min
         edge_z = z_min + height * props.edge_ratio
 
-        # --- Step 4: Cut bottom (remove below edge_z) ---
+        # --- Step 3: Create UV sphere dome ---
+        bpy.ops.object.select_all(action='DESELECT')
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=64,
+            ring_count=32,
+            radius=radius,
+            location=(center_x, center_y, center_z),
+        )
+        dome = context.active_object
+        dome.name = f"{scan.name}_HELMET_BASE"
+
+        # Bisect — remove the bottom portion
         with bpy.context.temp_override(
-            object=work, active_object=work, selected_objects=[work]
+            object=dome, active_object=dome, selected_objects=[dome]
         ):
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
@@ -87,68 +111,65 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 plane_no=(0, 0, 1),
                 clear_inner=True,
                 clear_outer=False,
-                use_fill=False,  # leave open — we want a shell, not a solid
+                use_fill=False,
             )
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # --- Step 5: Recalc normals before offset/solidify ---
-        # Critical: normals must be consistent and outward-facing for
-        # both vertex normal offset and Solidify to work correctly.
-        with bpy.context.temp_override(
-            object=work, active_object=work, selected_objects=[work]
-        ):
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.normals_make_consistent(inside=False)
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        # --- Step 6: Clearance offset via vertex normals ---
-        # Push every vertex outward along its normal by clearance amount.
-        # This is more reliable than Solidify offset=1 on scan meshes.
+        # --- Step 4: Shrinkwrap onto scan ---
         clearance_mm = props.clearance_mm
-        if clearance_mm > 0:
-            self._offset_along_normals(work, clearance_mm)
+        mod_shrink = dome.modifiers.new("HWG_Shrinkwrap", 'SHRINKWRAP')
+        mod_shrink.wrap_method = 'NEAREST_SURFACEPOINT'
+        mod_shrink.wrap_mode = 'OUTSIDE_SURFACE'
+        mod_shrink.target = target
+        mod_shrink.offset = clearance_mm  # clearance gap
+        with bpy.context.temp_override(object=dome, active_object=dome):
+            bpy.ops.object.modifier_apply(modifier=mod_shrink.name)
 
-        # --- Step 7: Shell thickness ---
-        # Use Solidify to create the shell wall. Key settings:
-        # - offset=-1: original surface becomes the OUTER wall; a second
-        #   surface is created inward by thickness amount. Since we already
-        #   pushed the mesh outward by clearance, the inner wall of the
-        #   shell sits at clearance distance from the head, and the outer
-        #   wall sits at clearance + thickness.
-        # - use_even_offset=False: MUST be off — even offset explodes on
-        #   open meshes with boundary edges from the bisect cut
-        # - use_rim=True: closes the shell along the open bottom edge
+        # --- Step 5: Smooth the Shrinkwrap result ---
+        mod_smooth2 = dome.modifiers.new("HWG_Smooth", 'SMOOTH')
+        mod_smooth2.factor = 0.5
+        mod_smooth2.iterations = 3
+        with bpy.context.temp_override(object=dome, active_object=dome):
+            bpy.ops.object.modifier_apply(modifier=mod_smooth2.name)
+
+        # --- Step 6: Solidify for shell thickness ---
         thickness_mm = props.thickness_mm
-        mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
+        mod_shell = dome.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
-        mod_shell.offset = -1.0
+        mod_shell.offset = -1.0  # grow outward from the shrinkwrapped surface
         mod_shell.use_rim = True
         mod_shell.use_rim_only = False
-        mod_shell.use_even_offset = False
-        with bpy.context.temp_override(object=work, active_object=work):
+        mod_shell.use_even_offset = True  # safe on clean UV sphere topology
+        with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
-        # --- Step 8: Rim band reinforcement ---
+        # --- Step 7: Optional rim band ---
         rim_height_mm = props.rim_height_mm
         if rim_height_mm > 0:
-            self._add_rim_band(work, edge_z, rim_height_mm)
+            self._add_rim_band(dome, rim_height_mm)
 
-        # --- Step 9: Final normals recalc ---
+        # --- Step 8: Final normals ---
         with bpy.context.temp_override(
-            object=work, active_object=work, selected_objects=[work]
+            object=dome, active_object=dome, selected_objects=[dome]
         ):
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        vert_count = len(work.data.vertices)
+        # --- Step 9: Clean up shrinkwrap target ---
+        bpy.data.objects.remove(target, do_unlink=True)
+
+        # Select the result
+        bpy.ops.object.select_all(action='DESELECT')
+        dome.select_set(True)
+        context.view_layer.objects.active = dome
+
+        vert_count = len(dome.data.vertices)
         self.report(
             {'INFO'},
-            f"Generated: {work.name} ({vert_count:,} verts, "
-            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
-            f"rim={rim_height_mm}mm)",
+            f"Generated: {dome.name} ({vert_count:,} verts, "
+            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm)",
         )
         return {'FINISHED'}
 
@@ -188,7 +209,6 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bmesh.update_edit_mesh(obj.data)
 
             # Fill all boundary holes (open bottom of scan, etc.)
-            # This makes the mesh watertight so voxel remesh works cleanly.
             bpy.ops.mesh.select_all(action='DESELECT')
             bpy.ops.mesh.select_non_manifold(
                 extend=False,
@@ -198,40 +218,16 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 use_non_contiguous=False,
                 use_verts=False,
             )
-            bpy.ops.mesh.fill_holes(sides=0)  # 0 = fill all regardless of size
+            bpy.ops.mesh.fill_holes(sides=0)
 
             bpy.ops.object.mode_set(mode='OBJECT')
 
-    def _offset_along_normals(self, obj, distance):
-        """Push every vertex outward along its normal by distance (mm).
-
-        More reliable than Solidify offset=1 for scan meshes because
-        it doesn't depend on face connectivity or manifold topology.
-        """
-        me = obj.data
-        me.calc_normals_split()
-
-        bm = bmesh.new()
-        bm.from_mesh(me)
-        bm.verts.ensure_lookup_table()
-
-        for v in bm.verts:
-            v.co += v.normal * distance
-
-        bm.to_mesh(me)
-        bm.free()
-        me.update()
-
-    def _add_rim_band(self, obj, edge_z, rim_height_mm):
+    def _add_rim_band(self, obj, rim_height_mm):
         """Extrude the bottom boundary edge downward to create a rim band."""
         with bpy.context.temp_override(
             object=obj, active_object=obj, selected_objects=[obj]
         ):
             bpy.ops.object.mode_set(mode='EDIT')
-
-            bm = bmesh.from_edit_mesh(obj.data)
-            bm.verts.ensure_lookup_table()
-            bm.edges.ensure_lookup_table()
 
             # Select boundary edges (the open bottom edge of the shell)
             bpy.ops.mesh.select_all(action='DESELECT')
@@ -244,7 +240,7 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 use_verts=False,
             )
 
-            # Extrude downward to create the rim band
+            # Extrude downward
             bpy.ops.mesh.extrude_region_move(
                 TRANSFORM_OT_translate={
                     "value": (0, 0, -rim_height_mm),
