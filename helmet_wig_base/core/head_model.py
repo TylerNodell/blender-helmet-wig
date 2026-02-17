@@ -4,13 +4,12 @@ Generates a head-shaped mesh using profile-based cross-section lofting
 with anatomical deformations. All math in millimeters.
 
 Key anatomical features modeled:
-- Egg-shaped top-down profile (longer front-to-back than side-to-side)
-- Nearly vertical sides in the lower half (above ears), curving over at top
-- Forehead is flat/vertical, occiput (back) is rounded and prominent
-- Widest point is above ear level at the parietal bones
-- Temple indent below the parietal width
+- Oblong egg shape: longer front-to-back than side-to-side
+- Flatter on top and sides, rounder in the back (depth holds fuller)
+- Width profile tapers sooner (exponent 1.8) → flatter sides
+- Depth profile holds fuller (exponent 3.0) → oblong front-to-back
+- Front/back asymmetry: forehead flatter (80%), occiput rounder (120%)
 - Crown sits slightly behind center
-- Occipital bump at lower-back of head
 - Forehead and nape are narrower than max width
 """
 
@@ -45,24 +44,34 @@ def _width_profile(t):
 
     Returns 0..1 where 1 = full width.
 
-    Above ear level: elliptical curve sqrt(1 - t^2.4)
+    Above ear level: elliptical curve sqrt(1 - t^1.8)
+    The lower exponent (1.8) makes the width taper sooner than depth,
+    creating a head that is flatter on the sides — narrower side-to-side
+    in the upper half compared to the front-to-back dimension.
     Below ear level: tapers inward (head narrows toward jaw/neck)
     """
     if t < 0:
         # Below ear level: taper inward. At t=-0.3 we're about 70% width.
         return max(0.3, 1.0 + t * 1.0)  # linear taper below ears
-    return math.sqrt(max(0.0, 1.0 - t ** 2.4))
+    return math.sqrt(max(0.0, 1.0 - t ** 1.8))
 
 
 def _depth_profile(t):
     """Depth factor across the full head height.
 
-    Same as width but slightly fuller above ear level.
+    Uses a higher exponent (3.0) than the width profile so that
+    front-to-back depth stays fuller much higher up the dome. This
+    creates the characteristic oblong/egg shape of a human head:
+    longer front-to-back than side-to-side, especially in the upper half.
+
+    At t=0.5: depth factor ≈ 0.97 vs width factor ≈ 0.84
+    At t=0.7: depth factor ≈ 0.90 vs width factor ≈ 0.70
+
     Below ear level: tapers less aggressively (back of head stays round).
     """
     if t < 0:
         return max(0.4, 1.0 + t * 0.8)
-    return math.sqrt(max(0.0, 1.0 - t ** 2.2))
+    return math.sqrt(max(0.0, 1.0 - t ** 3.0))
 
 
 def generate_head_mesh(
@@ -109,8 +118,10 @@ def generate_head_mesh(
 
     # --- Front/back depth split ---
     # Forehead is flatter (less depth), occiput is rounder (more depth).
-    front_depth = half_depth * 0.85
-    back_depth = half_depth * 1.15
+    # The 0.80/1.20 split creates a noticeably egg-shaped profile where
+    # the back of the head protrudes more than the front.
+    front_depth = half_depth * 0.80
+    back_depth = half_depth * 1.20
 
     # Adjust back depth from ear-to-ear-back arc
     expected_back_arc = _half_ellipse_arc(half_width, half_depth)
