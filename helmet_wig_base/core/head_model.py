@@ -38,55 +38,32 @@ def _lerp(a, b, t):
 
 
 def _width_profile(t):
-    """Width falloff from ear level (t=0) to crown (t=1).
+    """Width factor from ear level (t=0) to crown (t=1).
 
-    Returns a factor 0..1 where 1 = full width.
+    Returns 0..1 where 1 = full width.
 
-    A real head viewed from the front is shaped like a rounded rectangle:
-    nearly vertical sides for the bottom ~60%, then a smooth curve over
-    the top. The top of the head is still quite broad — NOT a point or
-    a narrow circle.
+    Uses a cosine-based curve: full width at t=0, smoothly and
+    continuously tapering to 0 at t=1. This naturally produces a
+    dome/skull shape without piecewise zones that create flat spots.
 
-    Key insight: the head maintains ~90%+ of its max width for most of
-    its height. The rapid curve-over only happens in the top ~25%.
+    An exponent < 1 on t stretches the full-width region (making the
+    sides more vertical before curving over), while the cosine ensures
+    the crown is smoothly rounded.
     """
-    if t < 0.05:
-        # Temple zone: very slight indent
-        return _lerp(0.97, 0.99, _smoothstep(t / 0.05))
-    elif t < 0.15:
-        # Parietal bulge: reaches full width
-        return _lerp(0.99, 1.0, _smoothstep((t - 0.05) / 0.10))
-    elif t < 0.60:
-        # Long nearly-vertical zone: very slight taper
-        frac = (t - 0.15) / 0.45
-        return _lerp(1.0, 0.95, frac * frac)
-    elif t < 0.85:
-        # Dome curve: moderate inward curve
-        frac = (t - 0.60) / 0.25
-        return _lerp(0.95, 0.55, _smoothstep(frac))
-    else:
-        # Crown cap: still fairly broad, not a pinch point
-        frac = (t - 0.85) / 0.15
-        return _lerp(0.55, 0.25, _smoothstep(frac))
+    # Remap t with a power curve to keep sides fuller longer.
+    # t_adj < t means the profile stays near 1.0 longer before dropping.
+    t_adj = t ** 0.7
+    return max(0.0, math.cos(t_adj * math.pi / 2.0))
 
 
 def _depth_profile(t):
-    """Depth falloff from ear level (t=0) to crown (t=1).
+    """Depth factor from ear level (t=0) to crown (t=1).
 
-    Same idea as width but stays fuller a bit longer (head is oval,
-    longer front-to-back).
+    Same cosine shape but slightly fuller (exponent 0.6 instead of 0.7)
+    since the head is longer front-to-back and holds its depth higher.
     """
-    if t < 0.10:
-        return _lerp(0.97, 1.0, _smoothstep(t / 0.10))
-    elif t < 0.65:
-        frac = (t - 0.10) / 0.55
-        return _lerp(1.0, 0.93, frac * frac)
-    elif t < 0.85:
-        frac = (t - 0.65) / 0.20
-        return _lerp(0.93, 0.50, _smoothstep(frac))
-    else:
-        frac = (t - 0.85) / 0.15
-        return _lerp(0.50, 0.25, _smoothstep(frac))
+    t_adj = t ** 0.6
+    return max(0.0, math.cos(t_adj * math.pi / 2.0))
 
 
 def generate_head_mesh(
@@ -153,8 +130,10 @@ def generate_head_mesh(
     for j in range(v_segments):
         t = j / (v_segments - 1) if v_segments > 1 else 0.0
 
-        # Height: sine curve gives steep sides, flat dome
-        z = height * math.sin(t * math.pi / 2.0)
+        # Linear height: evenly spaced rings from bottom to crown.
+        # The dome shape comes from the cosine width/depth profiles,
+        # not from bunching vertices at the top.
+        z = height * t
 
         # Profile factors at this height
         w_factor = _width_profile(t)
