@@ -46,6 +46,8 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         context.view_layer.objects.active = work
 
         # --- Step 1: Clean the raw scan mesh ---
+        # Merge doubles, remove loose geometry, fix normals, and
+        # fill boundary holes so the mesh is watertight before remesh.
         self._clean_mesh(work)
 
         # --- Step 2: Voxel remesh for uniform topology ---
@@ -151,7 +153,12 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
     # ------------------------------------------------------------------
 
     def _clean_mesh(self, obj):
-        """Clean a raw scan mesh: merge doubles, remove loose, fix normals."""
+        """Clean a raw scan mesh and make it watertight.
+
+        Steps: merge doubles, remove loose geometry, fix normals,
+        fill all boundary holes (open bottom of head scans, etc.)
+        so the voxel remesh gets a closed input.
+        """
         with bpy.context.temp_override(
             object=obj, active_object=obj, selected_objects=[obj]
         ):
@@ -175,6 +182,20 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
 
             bmesh.update_edit_mesh(obj.data)
+
+            # Fill all boundary holes (open bottom of scan, etc.)
+            # This makes the mesh watertight so voxel remesh works cleanly.
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bpy.ops.mesh.select_non_manifold(
+                extend=False,
+                use_wire=False,
+                use_boundary=True,
+                use_multi_face=False,
+                use_non_contiguous=False,
+                use_verts=False,
+            )
+            bpy.ops.mesh.fill_holes(sides=0)  # 0 = fill all regardless of size
+
             bpy.ops.object.mode_set(mode='OBJECT')
 
     def _offset_along_normals(self, obj, distance):
