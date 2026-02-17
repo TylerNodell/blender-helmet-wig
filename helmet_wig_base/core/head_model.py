@@ -44,43 +44,54 @@ def _width_profile(t):
 
     Returns a factor 0..1 where 1 = full width.
 
-    The profile:
-    - 0.0 to 0.10: temple zone, slightly narrower (indent to ~96%)
-    - 0.10 to 0.20: widens to full 100% (parietal bone)
-    - 0.20 to 0.50: stays wide, very gradual taper (~100% to ~90%)
-    - 0.50 to 1.00: curves inward to 0 (top of dome)
+    The profile models nearly vertical sides that curve over into a
+    broad, flat dome — not a pointy peak. Real heads are widest at the
+    parietal bones (just above ears) and maintain width well up the sides
+    before a smooth, relatively flat curve over the top.
+
+    Zones:
+    - 0.00–0.08: temple indent (~96% → ~99%)
+    - 0.08–0.18: parietal bulge, reaches full width
+    - 0.18–0.45: nearly vertical sides, very gradual taper (1.0 → 0.92)
+    - 0.45–0.75: curves inward more actively (0.92 → 0.50)
+    - 0.75–1.00: dome top, approaches a flat cap (~0.50 → ~0.12)
     """
-    if t < 0.10:
-        # Temple indent: 96% at bottom, widens toward parietal
-        return _lerp(0.96, 0.99, _smoothstep(t / 0.10))
-    elif t < 0.20:
-        # Parietal bulge: reach full width
-        return _lerp(0.99, 1.0, _smoothstep((t - 0.10) / 0.10))
-    elif t < 0.50:
-        # Upper sides: nearly vertical, very slow taper
-        frac = (t - 0.20) / 0.30
-        return _lerp(1.0, 0.88, frac * frac)  # quadratic for gradual start
+    if t < 0.08:
+        return _lerp(0.96, 0.99, _smoothstep(t / 0.08))
+    elif t < 0.18:
+        return _lerp(0.99, 1.0, _smoothstep((t - 0.08) / 0.10))
+    elif t < 0.45:
+        # Nearly vertical sides
+        frac = (t - 0.18) / 0.27
+        return _lerp(1.0, 0.92, frac * frac)
+    elif t < 0.75:
+        # Active taper through mid-dome
+        frac = (t - 0.45) / 0.30
+        return _lerp(0.92, 0.50, _smoothstep(frac))
     else:
-        # Top dome: curves inward to 0
-        frac = (t - 0.50) / 0.50
-        return 0.88 * math.cos(frac * math.pi / 2.0)
+        # Flat dome cap — stays wide, doesn't pinch to zero
+        frac = (t - 0.75) / 0.25
+        return _lerp(0.50, 0.12, _smoothstep(frac))
 
 
 def _depth_profile(t):
     """Depth falloff profile (sagittal).
 
-    Similar to width but the depth stays fuller longer since the head
-    is longer front-to-back and the curvature at the top is more gradual
-    in the sagittal plane.
+    Similar to width but the depth stays fuller slightly longer since
+    the head is generally longer front-to-back. The top also flattens
+    to a broad cap rather than converging to a point.
     """
-    if t < 0.15:
-        return _lerp(0.97, 1.0, _smoothstep(t / 0.15))
-    elif t < 0.55:
-        frac = (t - 0.15) / 0.40
-        return _lerp(1.0, 0.85, frac * frac)
+    if t < 0.12:
+        return _lerp(0.97, 1.0, _smoothstep(t / 0.12))
+    elif t < 0.50:
+        frac = (t - 0.12) / 0.38
+        return _lerp(1.0, 0.88, frac * frac)
+    elif t < 0.75:
+        frac = (t - 0.50) / 0.25
+        return _lerp(0.88, 0.48, _smoothstep(frac))
     else:
-        frac = (t - 0.55) / 0.45
-        return 0.85 * math.cos(frac * math.pi / 2.0)
+        frac = (t - 0.75) / 0.25
+        return _lerp(0.48, 0.12, _smoothstep(frac))
 
 
 def generate_head_mesh(
@@ -146,9 +157,10 @@ def generate_head_mesh(
         t = j / (v_segments - 1) if v_segments > 1 else 0.0
 
         # --- Height mapping ---
-        # Use a power curve so lower portion is more vertical:
-        # z rises quickly at first (steep sides), then levels off (dome)
-        z = height * (1.0 - (1.0 - t) ** 1.8)
+        # Sine-based curve: steep rise in lower portion (vertical sides),
+        # then flattens at the top (dome). This avoids the pointed peak
+        # that power curves produce.
+        z = height * math.sin(t * math.pi / 2.0)
 
         # --- Width and depth at this height ---
         w_factor = _width_profile(t)
@@ -170,8 +182,8 @@ def generate_head_mesh(
         else:
             forehead_flatten = 0.0
 
-        # --- Crown Y offset (crown behind center) ---
-        crown_y_offset = -half_depth * 0.08 * _smoothstep(t)
+        # --- Crown Y offset (crown slightly behind center) ---
+        crown_y_offset = -half_depth * 0.05 * _smoothstep(t)
 
         # --- Local forehead/nape widths at this height ---
         local_forehead_half = forehead_half * w_factor
@@ -220,8 +232,13 @@ def generate_head_mesh(
     for co in vertex_coords:
         verts.append(bm.verts.new(co))
 
-    # Pole at crown (behind center)
-    pole = bm.verts.new((0.0, -half_depth * 0.08, height))
+    # Crown pole: placed at the height of the topmost ring (which is at
+    # z = height due to sin(pi/2) = 1), slightly behind center to match
+    # the crown offset. The topmost ring is already small (~12% radius
+    # from the profiles), so the pole just closes the small opening.
+    top_ring_start = (v_segments - 1) * u_segments
+    top_ring_z = vertex_coords[top_ring_start][2]
+    pole = bm.verts.new((0.0, -half_depth * 0.06, top_ring_z))
     bm.verts.ensure_lookup_table()
 
     # Quad faces
@@ -234,11 +251,12 @@ def generate_head_mesh(
             v3 = (j + 1) * u_segments + i
             bm.faces.new([verts[v0], verts[v1], verts[v2], verts[v3]])
 
-    # Triangle fan to pole
-    top_start = (v_segments - 1) * u_segments
+    # Triangle fan to pole — closes the small opening at the top.
+    # Since the top ring is already small (12% of full radius), this
+    # creates a flat cap, not a pointy peak.
     for i in range(u_segments):
         i_next = (i + 1) % u_segments
-        bm.faces.new([verts[top_start + i], verts[top_start + i_next], pole])
+        bm.faces.new([verts[top_ring_start + i], verts[top_ring_start + i_next], pole])
 
     # Bottom cap
     equator_verts = [verts[i] for i in range(u_segments)]
