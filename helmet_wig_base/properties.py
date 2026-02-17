@@ -12,32 +12,28 @@ from bpy.props import (
 class HWG_SceneProps(bpy.types.PropertyGroup):
     """All helmet wig generator settings, stored per-scene."""
 
-    # --- Input ---
+    # --- Input (Scan) ---
     scan_object: PointerProperty(
         name="Scan Object",
         description="The imported head scan mesh",
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'MESH',
     )
-    meta_json_path: StringProperty(
-        name="meta.json",
-        description="Path to the scan metadata JSON file",
-        subtype='FILE_PATH',
-        default="",
-    )
 
     # --- Scale ---
     scan_units: EnumProperty(
         name="Scan Units",
+        description="Unit system of the imported scan file",
         items=[
-            ('M', "Meters", "Scan is in meters (ARKit default)"),
+            ('M', "Meters", "Scan is in meters (ARKit / Polycam / Scaniverse default)"),
+            ('CM', "Centimeters", "Scan is in centimeters"),
             ('MM', "Millimeters", "Scan is already in mm"),
         ],
         default='M',
     )
     scale_factor: FloatProperty(
         name="Scale Factor",
-        description="Computed or manual scale correction factor",
+        description="Additional manual scale correction (applied on top of unit conversion)",
         default=1.0,
         min=0.01,
         max=100.0,

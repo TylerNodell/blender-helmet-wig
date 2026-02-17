@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "units": {
-    "scanUnits": "M",
+  "scan": {
+    "units": "M",
     "scaleFactor": 1.0
   },
   "crop": {
