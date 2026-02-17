@@ -75,18 +75,17 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         context.view_layer.objects.active = work
 
         # --- Contoured edge cut ---
-        # Delete vertices below a per-angle Z threshold, then snap the
-        # resulting boundary vertices to the exact contour line for a
-        # smooth edge instead of a jagged stair-step.
+        # 1) Delete all vertices clearly below the contour threshold.
+        # 2) Move the new boundary vertices (lowest surviving ring per
+        #    column) down to the exact contour Z so the edge is smooth.
         with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
             bpy.ops.object.mode_set(mode='EDIT')
             me = work.data
             bm_edit = bmesh.from_edit_mesh(me)
             bm_edit.verts.ensure_lookup_table()
 
-            # Tag each vertex as above or below its threshold
-            above = set()
-            below = set()
+            # Delete vertices below threshold
+            verts_to_delete = []
             for v in bm_edit.verts:
                 angle = math.atan2(v.co.y, v.co.x)
                 if angle < 0:
@@ -95,55 +94,25 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                     angle, head_height_mm, forehead_height_mm, props.edge_ratio
                 )
                 if v.co.z < threshold_z:
-                    below.add(v)
-                else:
-                    above.add(v)
+                    verts_to_delete.append(v)
 
-            # For edges that cross the threshold (one vert above, one below),
-            # split them at the exact crossing point. This creates new verts
-            # right on the contour line.
-            edges_to_split = []
-            for e in bm_edit.edges:
-                v0, v1 = e.verts
-                if (v0 in above) != (v1 in above):
-                    # Edge crosses the threshold — find the split fraction
-                    a0 = math.atan2(v0.co.y, v0.co.x)
-                    if a0 < 0:
-                        a0 += 2.0 * math.pi
-                    a1 = math.atan2(v1.co.y, v1.co.x)
-                    if a1 < 0:
-                        a1 += 2.0 * math.pi
-
-                    # Use average angle for threshold (vertices are close)
-                    avg_angle = (a0 + a1) / 2.0
-                    threshold_z = _edge_z_at_angle(
-                        avg_angle, head_height_mm, forehead_height_mm,
-                        props.edge_ratio,
-                    )
-
-                    # Linear interpolation: find t where z = threshold_z
-                    dz = v1.co.z - v0.co.z
-                    if abs(dz) > 0.001:
-                        frac = (threshold_z - v0.co.z) / dz
-                        frac = max(0.01, min(0.99, frac))
-                    else:
-                        frac = 0.5
-
-                    edges_to_split.append((e, frac))
-
-            # Split all crossing edges
-            for edge, frac in edges_to_split:
-                try:
-                    new_vert, new_edges = bmesh.utils.edge_split(edge, edge.verts[0], frac)
-                    above.add(new_vert)  # New vert is on the threshold — keep it
-                except Exception:
-                    pass
-
-            # Now delete all original "below" vertices
-            bm_edit.verts.ensure_lookup_table()
-            verts_to_delete = [v for v in bm_edit.verts if v in below and v.is_valid]
             if verts_to_delete:
                 bmesh.ops.delete(bm_edit, geom=verts_to_delete, context='VERTS')
+
+            # Now find boundary verts (on open edges) and snap them to
+            # the exact contour Z. This smooths out the stair-step.
+            bm_edit.verts.ensure_lookup_table()
+            bm_edit.edges.ensure_lookup_table()
+            for v in bm_edit.verts:
+                if v.is_boundary:
+                    angle = math.atan2(v.co.y, v.co.x)
+                    if angle < 0:
+                        angle += 2.0 * math.pi
+                    target_z = _edge_z_at_angle(
+                        angle, head_height_mm, forehead_height_mm,
+                        props.edge_ratio,
+                    )
+                    v.co.z = target_z
 
             bmesh.update_edit_mesh(me)
             bpy.ops.object.mode_set(mode='OBJECT')
