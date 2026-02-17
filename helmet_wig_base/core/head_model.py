@@ -12,7 +12,6 @@ Key anatomical features modeled:
 - Crown sits slightly behind center
 - Occipital bump at lower-back of head
 - Forehead and nape are narrower than max width
-- Contoured edge line: higher at forehead, lower at nape, dipping over ears
 """
 
 import math
@@ -36,54 +35,6 @@ def _half_ellipse_arc(a, b):
 def _lerp(a, b, t):
     """Linear interpolation."""
     return a + (b - a) * t
-
-
-def _edge_z(angle, height, forehead_height_mm, edge_ratio):
-    """Compute the Z height of the helmet edge at a given angle around head.
-
-    angle: 0 = right ear, pi/2 = front, pi = left ear, 3pi/2 = back.
-
-    The helmet edge line is NOT flat — it follows a natural contour:
-    - Front (forehead): highest point, set by forehead_height measurement
-    - Sides (ears): lowest point — the helmet sits just above the ears
-    - Back (nape): medium-low — covers the occipital bone
-
-    Returns Z in mm (absolute, from origin at ear-top level which is Z=0).
-    Since the head mesh starts at Z=0 (ear level), negative Z values are
-    below ear level.
-    """
-    # Base cut height: how much of the head the helmet covers.
-    # edge_ratio=0.25 means the helmet starts 25% up from the bottom of
-    # the generated head mesh.
-    base_z = height * edge_ratio
-
-    # How far down from ear level each zone drops.
-    # Front: forehead_height determines how much forehead is exposed.
-    # The helmet edge at the front sits at forehead_height above the brow.
-    # We express edge heights relative to the base_z.
-    front_z = base_z + forehead_height_mm * 0.3   # Higher in front
-    side_z = base_z - height * 0.05                # Dip down at ears
-    back_z = base_z - height * 0.08                # Lower in back (nape)
-
-    sin_a = math.sin(angle)   # +front, -back
-    cos_a = math.cos(angle)   # +right, -left
-
-    front_factor = max(0.0, sin_a)   # 1 at front, 0 at back/sides
-    back_factor = max(0.0, -sin_a)   # 1 at back, 0 at front/sides
-    side_factor = abs(cos_a)          # 1 at ears, 0 at front/back
-
-    # Blend between zones using squared factors for smoother transitions
-    front_w = front_factor ** 2
-    back_w = back_factor ** 2
-    side_w = side_factor ** 2
-
-    total_w = front_w + back_w + side_w
-    if total_w > 0:
-        z = (front_z * front_w + back_z * back_w + side_z * side_w) / total_w
-    else:
-        z = base_z
-
-    return z
 
 
 def _width_profile(t):
@@ -149,21 +100,20 @@ def generate_head_mesh(
     forehead_width_mm,
     nape_width_mm,
     forehead_height_mm,
-    edge_ratio=0.25,
     u_segments=64,
     v_segments=48,
 ):
     """Generate a parametric head mesh from tape measurements.
 
-    The mesh represents the helmet shell shape — it starts at a contoured
-    edge line (higher at forehead, lower at nape, dipping at ears) and
-    extends up to the crown. The bottom edge is NOT flat.
+    Produces a closed mesh from Z=0 (ear-top level) to Z=height (crown).
+    The bottom is flat at Z=0 — the contoured helmet edge is applied
+    later by the operator.
 
     Coordinate system: X = left-right, Y = front-back (positive = front),
     Z = up. Origin at center of head at ear-top level.
 
     Returns:
-        bmesh.types.BMesh: Closed, manifold mesh ready for solidify.
+        bmesh.types.BMesh: Closed, manifold mesh representing the head shape.
     """
     # --- Base dimensions ---
     half_width = head_width_mm / 2.0
@@ -197,110 +147,73 @@ def generate_head_mesh(
     occipital_bump_height = 0.25
     occipital_bump_strength = half_depth * 0.08
 
-    # --- Precompute edge Z for each u-slice ---
-    # Each vertical slice around the head has a different starting Z
-    # based on where the helmet edge sits at that angle.
-    edge_z_per_u = []
-    for i in range(u_segments):
-        angle = (i / u_segments) * 2.0 * math.pi
-        ez = _edge_z(angle, height, forehead_height_mm, edge_ratio)
-        edge_z_per_u.append(ez)
-
     # --- Generate vertex rings ---
-    # For each height ring j (0=bottom edge, v_segments-1=crown), and
-    # each angular slice i, compute the vertex position.
-    # The bottom ring (j=0) follows the contoured edge line.
-    # The top ring (j=v_segments-1) is near the crown.
     vertex_coords = []
 
     for j in range(v_segments):
         t = j / (v_segments - 1) if v_segments > 1 else 0.0
 
-        # --- Width and depth factors at this height level ---
+        # Height: sine curve gives steep sides, flat dome
+        z = height * math.sin(t * math.pi / 2.0)
+
+        # Profile factors at this height
         w_factor = _width_profile(t)
         d_factor = _depth_profile(t)
 
-        # --- Forehead flattening ---
+        local_half_width = half_width * w_factor
+        local_front = front_depth * d_factor
+        local_back = back_depth * d_factor
+
+        # Occipital bump
+        bump_influence = math.exp(
+            -((t - occipital_bump_height) ** 2) / (2.0 * 0.08 ** 2)
+        )
+        local_back += occipital_bump_strength * bump_influence
+
+        # Forehead flattening
         if t < 0.4:
             forehead_flatten = 0.40 * (1.0 - _smoothstep(t / 0.4))
         else:
             forehead_flatten = 0.0
 
-        # --- Crown Y offset (crown slightly behind center) ---
+        # Crown Y offset (slightly behind center)
         crown_y_offset = -half_depth * 0.05 * _smoothstep(t)
 
-        # --- Generate ring of vertices ---
+        # Local forehead/nape widths
+        local_forehead_half = forehead_half * w_factor
+        local_nape_half = nape_half * w_factor
+
+        # --- Generate ring ---
         for i in range(u_segments):
-            angle = (i / u_segments) * 2.0 * math.pi
-            cos_u = math.cos(angle)
-            sin_u = math.sin(angle)
+            u = (i / u_segments) * 2.0 * math.pi
+            cos_u = math.cos(u)
+            sin_u = math.sin(u)
 
             front_factor = max(0.0, sin_u)
             back_factor = max(0.0, -sin_u)
 
-            # --- Z: interpolate from this slice's edge Z to crown Z ---
-            # At t=0, z = edge_z for this angle; at t=1, z = height
-            local_edge_z = edge_z_per_u[i]
-            z = _lerp(local_edge_z, height, math.sin(t * math.pi / 2.0))
-
-            # --- Compute the "global t" for profile lookups ---
-            # The profiles are defined relative to the full head (0=ear
-            # level, 1=crown). We need to know where this z sits in that
-            # range to get the right width/depth.
-            if height > 0:
-                global_t = max(0.0, min(1.0, z / height))
-            else:
-                global_t = 0.0
-
-            # Re-evaluate profiles at the actual z position
-            w_factor_z = _width_profile(global_t)
-            d_factor_z = _depth_profile(global_t)
-
-            local_half_width = half_width * w_factor_z
-            local_front = front_depth * d_factor_z
-            local_back = back_depth * d_factor_z
-
-            # --- Occipital bump ---
-            bump_influence = math.exp(
-                -((global_t - occipital_bump_height) ** 2) / (2.0 * 0.08 ** 2)
-            )
-            local_back += occipital_bump_strength * bump_influence
-
-            # --- Forehead flattening (based on global position) ---
-            if global_t < 0.4:
-                local_forehead_flatten = 0.40 * (1.0 - _smoothstep(global_t / 0.4))
-            else:
-                local_forehead_flatten = 0.0
-
-            # Crown offset based on global position
-            local_crown_offset = -half_depth * 0.05 * _smoothstep(global_t)
-
-            # --- Local forehead/nape widths ---
-            local_forehead_half = forehead_half * w_factor_z
-            local_nape_half = nape_half * w_factor_z
-
-            # --- X (left-right) ---
+            # X (left-right)
             x = local_half_width * cos_u
 
             # Forehead narrowing
             if front_factor > 0.01 and abs(x) > local_forehead_half:
-                blend = front_factor * _smoothstep(max(0, 1.0 - global_t * 2.0)) * 0.70
+                blend = front_factor * _smoothstep(max(0, 1.0 - t * 2.0)) * 0.70
                 target_x = math.copysign(local_forehead_half, x)
                 x = _lerp(x, target_x, blend)
 
             # Nape narrowing
             if back_factor > 0.01 and abs(x) > local_nape_half:
-                blend = back_factor * _smoothstep(max(0, 1.0 - global_t * 2.0)) * 0.70
+                blend = back_factor * _smoothstep(max(0, 1.0 - t * 2.0)) * 0.70
                 target_x = math.copysign(local_nape_half, x)
                 x = _lerp(x, target_x, blend)
 
-            # --- Y (front-back) ---
+            # Y (front-back)
             if sin_u >= 0:
-                y = local_front * sin_u * (1.0 - local_forehead_flatten * front_factor)
+                y = local_front * sin_u * (1.0 - forehead_flatten * front_factor)
             else:
                 y = local_back * sin_u
 
-            y += local_crown_offset
+            y += crown_y_offset
 
             vertex_coords.append((x, y, z))
 
@@ -311,7 +224,7 @@ def generate_head_mesh(
     for co in vertex_coords:
         verts.append(bm.verts.new(co))
 
-    # Crown pole: at the height of the topmost ring, slightly behind center.
+    # Crown pole at top ring height, slightly behind center
     top_ring_start = (v_segments - 1) * u_segments
     top_ring_z = vertex_coords[top_ring_start][2]
     pole = bm.verts.new((0.0, -half_depth * 0.06, top_ring_z))
@@ -327,12 +240,12 @@ def generate_head_mesh(
             v3 = (j + 1) * u_segments + i
             bm.faces.new([verts[v0], verts[v1], verts[v2], verts[v3]])
 
-    # Triangle fan to pole (closes the small opening at the crown)
+    # Triangle fan to pole
     for i in range(u_segments):
         i_next = (i + 1) % u_segments
         bm.faces.new([verts[top_ring_start + i], verts[top_ring_start + i_next], pole])
 
-    # Bottom cap: the contoured edge ring (NOT flat — follows helmet edge line)
+    # Bottom cap
     equator_verts = [verts[i] for i in range(u_segments)]
     bm.faces.new(list(reversed(equator_verts)))
 

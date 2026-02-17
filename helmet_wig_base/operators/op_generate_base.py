@@ -1,6 +1,37 @@
+import math
+
 import bpy
 import bmesh
 from mathutils import Vector
+
+
+def _edge_z_at_angle(angle, height, forehead_height_mm, edge_ratio):
+    """Compute the Z height of the helmet edge at a given angle.
+
+    angle: 0 = right ear, pi/2 = front, pi = left ear, 3pi/2 = back.
+
+    Returns Z in mm. The contour is:
+    - Front (forehead): highest — sits above the brow
+    - Sides (ears): lowest — just above ears
+    - Back (nape): medium-low — covers occipital area
+    """
+    base_z = height * edge_ratio
+
+    front_z = base_z + forehead_height_mm * 0.3
+    side_z = base_z - height * 0.05
+    back_z = base_z - height * 0.08
+
+    sin_a = math.sin(angle)
+    cos_a = math.cos(angle)
+
+    front_w = max(0.0, sin_a) ** 2
+    back_w = max(0.0, -sin_a) ** 2
+    side_w = cos_a ** 2
+
+    total_w = front_w + back_w + side_w
+    if total_w > 0:
+        return (front_z * front_w + back_z * back_w + side_z * side_w) / total_w
+    return base_z
 
 
 class HWG_OT_GenerateBase(bpy.types.Operator):
@@ -13,10 +44,10 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         props = context.scene.hwg
 
         # --- Generate parametric head mesh from measurements (cm -> mm) ---
-        # The head model now builds the contoured edge line directly into
-        # the mesh — no flat bisect cut needed. The edge_ratio controls
-        # how much of the lower head is included.
         from ..core.head_model import generate_head_mesh
+
+        head_height_mm = props.head_height_cm * 10.0
+        forehead_height_mm = props.forehead_height_cm * 10.0
 
         bm = generate_head_mesh(
             head_circumference_mm=props.head_circumference_cm * 10.0,
@@ -25,11 +56,10 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             ear_to_ear_back_mm=props.ear_to_ear_back_cm * 10.0,
             head_width_mm=props.head_width_cm * 10.0,
             head_depth_mm=props.head_depth_cm * 10.0,
-            head_height_mm=props.head_height_cm * 10.0,
+            head_height_mm=head_height_mm,
             forehead_width_mm=props.forehead_width_cm * 10.0,
             nape_width_mm=props.nape_width_cm * 10.0,
-            forehead_height_mm=props.forehead_height_cm * 10.0,
-            edge_ratio=props.edge_ratio,
+            forehead_height_mm=forehead_height_mm,
         )
 
         # --- Create Blender object from bmesh ---
@@ -44,26 +74,41 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         work.select_set(True)
         context.view_layer.objects.active = work
 
-        # --- Delete the bottom cap face to create an open shell ---
-        # The head model includes a bottom cap for manifold-ness,
-        # but we need the bottom open for solidify to work correctly.
+        # --- Contoured edge cut ---
+        # Instead of a flat horizontal bisect, we delete vertices below
+        # a per-angle Z threshold. This creates a contoured edge that is
+        # higher at the forehead and lower at the back/ears.
         with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
             bpy.ops.object.mode_set(mode='EDIT')
             me = work.data
             bm_edit = bmesh.from_edit_mesh(me)
-            bm_edit.faces.ensure_lookup_table()
+            bm_edit.verts.ensure_lookup_table()
 
-            # Find and delete the bottom cap face (the n-gon at the bottom).
-            # It's the face with the most vertices (u_segments sides).
-            cap_face = max(bm_edit.faces, key=lambda f: len(f.verts))
-            bmesh.ops.delete(bm_edit, geom=[cap_face], context='FACES')
+            verts_to_delete = []
+            for v in bm_edit.verts:
+                co = v.co
+                # Compute angle of this vertex around the Y axis
+                # atan2(y, x) gives angle, but our convention is:
+                #   angle=0 → +X (right ear), pi/2 → +Y (front)
+                angle = math.atan2(co.y, co.x)
+                # atan2 returns -pi..pi, we need 0..2pi
+                if angle < 0:
+                    angle += 2.0 * math.pi
+
+                threshold_z = _edge_z_at_angle(
+                    angle, head_height_mm, forehead_height_mm, props.edge_ratio
+                )
+
+                if co.z < threshold_z:
+                    verts_to_delete.append(v)
+
+            if verts_to_delete:
+                bmesh.ops.delete(bm_edit, geom=verts_to_delete, context='VERTS')
 
             bmesh.update_edit_mesh(me)
             bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Clearance offset (move vertices outward along normals) ---
-        # This pushes the single-wall surface outward so the helmet sits
-        # above the head rather than directly on it.
         clearance_mm = props.clearance_mm
         if clearance_mm > 0:
             with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
@@ -72,11 +117,9 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 bm_clear = bmesh.from_edit_mesh(me)
                 bm_clear.verts.ensure_lookup_table()
 
-                # Recalculate normals so they point outward
                 bmesh.ops.recalc_face_normals(bm_clear, faces=bm_clear.faces[:])
 
                 for v in bm_clear.verts:
-                    # Average face normal of adjacent faces
                     if v.link_faces:
                         avg_normal = Vector((0, 0, 0))
                         for f in v.link_faces:
@@ -90,21 +133,17 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Shell thickness (Solidify into a hollow shell) ---
-        # The mesh is currently a single-wall open surface (dome with open bottom).
-        # Solidify creates inner+outer walls with thickness, and use_rim connects
-        # them at the open bottom edge to form a proper shell.
         thickness_mm = props.thickness_mm
         mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
-        mod_shell.offset = -1.0          # Thicken inward from outer surface
-        mod_shell.use_rim = True          # Close the open bottom edge
+        mod_shell.offset = -1.0
+        mod_shell.use_rim = True
         mod_shell.use_rim_only = False
         mod_shell.use_even_offset = True
         with bpy.context.temp_override(object=work, active_object=work):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
         # --- Rim band reinforcement ---
-        # Extrude the bottom edge loop downward to create a thicker rim
         rim_height_mm = props.rim_height_mm
         if rim_height_mm > 0:
             with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
@@ -115,7 +154,6 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 bm_rim.verts.ensure_lookup_table()
                 bm_rim.edges.ensure_lookup_table()
 
-                # Select only the boundary (open) edges at the bottom rim
                 bpy.ops.mesh.select_all(action='DESELECT')
                 bpy.ops.mesh.select_non_manifold(
                     extend=False, use_wire=False,
