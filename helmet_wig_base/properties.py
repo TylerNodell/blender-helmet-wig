@@ -51,8 +51,8 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     # --- Base ---
     clearance_mm: FloatProperty(
         name="Clearance (mm)",
-        description="Outward offset from scan surface for wig cap + comfort",
-        default=4.0,
+        description="Outward offset from scan surface for foam liner + comfort (2mm for 2mm EVA foam)",
+        default=2.0,
         min=0.0,
         max=20.0,
     )
@@ -65,8 +65,8 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     )
     rim_height_mm: FloatProperty(
         name="Rim Height (mm)",
-        description="Height of the stiffening rim band at the bottom edge",
-        default=8.0,
+        description="Height of the stiffening rim band at the bottom edge (0 = no rim band)",
+        default=0.0,
         min=0.0,
         max=30.0,
     )
