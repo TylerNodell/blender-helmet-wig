@@ -87,60 +87,55 @@ def _edge_z(angle, height, forehead_height_mm, edge_ratio):
 
 
 def _width_profile(t):
-    """Width falloff profile for the head shape.
-
-    t: 0 = bottom edge, 1 = crown.
+    """Width falloff from ear level (t=0) to crown (t=1).
 
     Returns a factor 0..1 where 1 = full width.
 
-    The profile models nearly vertical sides that curve over into a
-    broad, flat dome — not a pointy peak. Real heads are widest at the
-    parietal bones (just above ears) and maintain width well up the sides
-    before a smooth, relatively flat curve over the top.
+    A real head viewed from the front is shaped like a rounded rectangle:
+    nearly vertical sides for the bottom ~60%, then a smooth curve over
+    the top. The top of the head is still quite broad — NOT a point or
+    a narrow circle.
 
-    Zones:
-    - 0.00–0.08: temple indent (~96% → ~99%)
-    - 0.08–0.18: parietal bulge, reaches full width
-    - 0.18–0.45: nearly vertical sides, very gradual taper (1.0 → 0.92)
-    - 0.45–0.75: curves inward more actively (0.92 → 0.50)
-    - 0.75–1.00: dome top, approaches a flat cap (~0.50 → ~0.12)
+    Key insight: the head maintains ~90%+ of its max width for most of
+    its height. The rapid curve-over only happens in the top ~25%.
     """
-    if t < 0.08:
-        return _lerp(0.96, 0.99, _smoothstep(t / 0.08))
-    elif t < 0.18:
-        return _lerp(0.99, 1.0, _smoothstep((t - 0.08) / 0.10))
-    elif t < 0.45:
-        # Nearly vertical sides
-        frac = (t - 0.18) / 0.27
-        return _lerp(1.0, 0.92, frac * frac)
-    elif t < 0.75:
-        # Active taper through mid-dome
-        frac = (t - 0.45) / 0.30
-        return _lerp(0.92, 0.50, _smoothstep(frac))
+    if t < 0.05:
+        # Temple zone: very slight indent
+        return _lerp(0.97, 0.99, _smoothstep(t / 0.05))
+    elif t < 0.15:
+        # Parietal bulge: reaches full width
+        return _lerp(0.99, 1.0, _smoothstep((t - 0.05) / 0.10))
+    elif t < 0.60:
+        # Long nearly-vertical zone: very slight taper
+        frac = (t - 0.15) / 0.45
+        return _lerp(1.0, 0.95, frac * frac)
+    elif t < 0.85:
+        # Dome curve: moderate inward curve
+        frac = (t - 0.60) / 0.25
+        return _lerp(0.95, 0.55, _smoothstep(frac))
     else:
-        # Flat dome cap — stays wide, doesn't pinch to zero
-        frac = (t - 0.75) / 0.25
-        return _lerp(0.50, 0.12, _smoothstep(frac))
+        # Crown cap: still fairly broad, not a pinch point
+        frac = (t - 0.85) / 0.15
+        return _lerp(0.55, 0.25, _smoothstep(frac))
 
 
 def _depth_profile(t):
-    """Depth falloff profile (sagittal).
+    """Depth falloff from ear level (t=0) to crown (t=1).
 
-    Similar to width but the depth stays fuller slightly longer since
-    the head is generally longer front-to-back. The top also flattens
-    to a broad cap rather than converging to a point.
+    Same idea as width but stays fuller a bit longer (head is oval,
+    longer front-to-back).
     """
-    if t < 0.12:
-        return _lerp(0.97, 1.0, _smoothstep(t / 0.12))
-    elif t < 0.50:
-        frac = (t - 0.12) / 0.38
-        return _lerp(1.0, 0.88, frac * frac)
-    elif t < 0.75:
-        frac = (t - 0.50) / 0.25
-        return _lerp(0.88, 0.48, _smoothstep(frac))
+    if t < 0.10:
+        return _lerp(0.97, 1.0, _smoothstep(t / 0.10))
+    elif t < 0.65:
+        frac = (t - 0.10) / 0.55
+        return _lerp(1.0, 0.93, frac * frac)
+    elif t < 0.85:
+        frac = (t - 0.65) / 0.20
+        return _lerp(0.93, 0.50, _smoothstep(frac))
     else:
-        frac = (t - 0.75) / 0.25
-        return _lerp(0.48, 0.12, _smoothstep(frac))
+        frac = (t - 0.85) / 0.15
+        return _lerp(0.50, 0.25, _smoothstep(frac))
 
 
 def generate_head_mesh(
