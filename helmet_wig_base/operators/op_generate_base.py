@@ -48,6 +48,7 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         edge_z = z_min + height * props.edge_ratio
 
         # --- Cut bottom (remove below edge_z) ---
+        # use_fill=False: we want an open bottom edge, not a sealed cap
         with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
@@ -56,74 +57,71 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 plane_no=(0, 0, 1),
                 clear_inner=True,
                 clear_outer=False,
-                use_fill=True,
+                use_fill=False,
             )
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # --- Hole filling (safety net for non-manifold edges) ---
-        with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
-            bpy.ops.object.mode_set(mode='EDIT')
-
-            me = work.data
-            bm = bmesh.from_edit_mesh(me)
-
-            bpy.ops.mesh.select_all(action='DESELECT')
-            bpy.ops.mesh.select_non_manifold(extend=False, use_wire=False,
-                                              use_boundary=True, use_multi_face=False,
-                                              use_non_contiguous=False, use_verts=False)
-
-            bpy.ops.mesh.edge_face_add()
-            bpy.ops.mesh.fill_holes(sides=0)
-
-            bmesh.update_edit_mesh(me)
-            bpy.ops.mesh.select_all(action='DESELECT')
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        # --- Clearance offset (Solidify outward) ---
+        # --- Clearance offset (move vertices outward along normals) ---
+        # This pushes the single-wall surface outward so the helmet sits
+        # above the head rather than directly on it.
         clearance_mm = props.clearance_mm
         if clearance_mm > 0:
-            mod_clear = work.modifiers.new("HWG_Clearance", 'SOLIDIFY')
-            mod_clear.thickness = clearance_mm
-            mod_clear.offset = 1.0
-            mod_clear.use_rim = False
-            mod_clear.use_even_offset = True
-            with bpy.context.temp_override(object=work, active_object=work):
-                bpy.ops.object.modifier_apply(modifier=mod_clear.name)
+            with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
+                bpy.ops.object.mode_set(mode='EDIT')
+                me = work.data
+                bm_clear = bmesh.from_edit_mesh(me)
+                bm_clear.verts.ensure_lookup_table()
 
-        # --- Shell thickness ---
+                # Recalculate normals so they point outward
+                bmesh.ops.recalc_face_normals(bm_clear, faces=bm_clear.faces[:])
+
+                for v in bm_clear.verts:
+                    # Average face normal of adjacent faces
+                    if v.link_faces:
+                        avg_normal = Vector((0, 0, 0))
+                        for f in v.link_faces:
+                            avg_normal += f.normal
+                        avg_normal.normalize()
+                        v.co += avg_normal * clearance_mm
+                    else:
+                        v.co += v.normal * clearance_mm
+
+                bmesh.update_edit_mesh(me)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+        # --- Shell thickness (Solidify into a hollow shell) ---
+        # The mesh is currently a single-wall open surface (dome with open bottom).
+        # Solidify creates inner+outer walls with thickness, and use_rim connects
+        # them at the open bottom edge to form a proper shell.
         thickness_mm = props.thickness_mm
         mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
-        mod_shell.offset = -1.0
-        mod_shell.use_rim = True
+        mod_shell.offset = -1.0          # Thicken inward from outer surface
+        mod_shell.use_rim = True          # Close the open bottom edge
         mod_shell.use_rim_only = False
         mod_shell.use_even_offset = True
         with bpy.context.temp_override(object=work, active_object=work):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
         # --- Rim band reinforcement ---
+        # Extrude the bottom edge loop downward to create a thicker rim
         rim_height_mm = props.rim_height_mm
         if rim_height_mm > 0:
             with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
                 bpy.ops.object.mode_set(mode='EDIT')
 
                 me = work.data
-                bm = bmesh.from_edit_mesh(me)
-                bm.verts.ensure_lookup_table()
-                bm.edges.ensure_lookup_table()
+                bm_rim = bmesh.from_edit_mesh(me)
+                bm_rim.verts.ensure_lookup_table()
+                bm_rim.edges.ensure_lookup_table()
 
+                # Select only the boundary (open) edges at the bottom rim
                 bpy.ops.mesh.select_all(action='DESELECT')
-
-                z_threshold = edge_z + 2.0
-                for v in bm.verts:
-                    world_co = work.matrix_world @ v.co
-                    if world_co.z <= z_threshold:
-                        v.select = True
-
-                bmesh.update_edit_mesh(me)
-
-                bpy.ops.mesh.select_mode(type='EDGE')
-                bpy.ops.mesh.loop_multi_select(ring=False)
+                bpy.ops.mesh.select_non_manifold(
+                    extend=False, use_wire=False,
+                    use_boundary=True, use_multi_face=False,
+                    use_non_contiguous=False, use_verts=False,
+                )
 
                 bpy.ops.mesh.extrude_region_move(
                     TRANSFORM_OT_translate={
