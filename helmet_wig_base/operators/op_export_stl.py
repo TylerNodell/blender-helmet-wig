@@ -54,9 +54,6 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
 
         # Write sidecar JSON
         json_path = os.path.join(export_dir, f"helmet_base_{timestamp}.json")
-        bbox = [obj.matrix_world @ bpy.mathutils.Vector(c) for c in obj.bound_box]
-
-        # Safer: import mathutils at module level or inline
         from mathutils import Vector
         bbox = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
 
@@ -65,6 +62,18 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
             "exportTimestamp": datetime.now().isoformat(),
             "units": "mm",
             "sourceObject": obj.name,
+            "measurements": {
+                "headCircumferenceCm": props.head_circumference_cm,
+                "frontToBackArcCm": props.front_to_back_arc_cm,
+                "earToEarOverCm": props.ear_to_ear_over_cm,
+                "earToEarBackCm": props.ear_to_ear_back_cm,
+                "headWidthCm": props.head_width_cm,
+                "headDepthCm": props.head_depth_cm,
+                "headHeightCm": props.head_height_cm,
+                "foreheadWidthCm": props.forehead_width_cm,
+                "napeWidthCm": props.nape_width_cm,
+                "foreheadHeightCm": props.forehead_height_cm,
+            },
             "parameters": {
                 "clearanceMm": props.clearance_mm,
                 "thicknessMm": props.thickness_mm,

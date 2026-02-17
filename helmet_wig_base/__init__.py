@@ -4,7 +4,7 @@ bl_info = {
     "version": (0, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > HelmetWig",
-    "description": "Generate 3D-printable helmet wig bases from head scan meshes.",
+    "description": "Generate 3D-printable helmet wig bases from tape measurements.",
     "category": "Object",
 }
 

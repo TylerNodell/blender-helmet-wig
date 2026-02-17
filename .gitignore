@@ -6,3 +6,4 @@ __pycache__/
 *.stl
 *.zip
 CLAUDE.md
+.claude/

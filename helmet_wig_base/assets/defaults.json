@@ -1,8 +1,16 @@
 {
   "version": "1.0.0",
-  "units": {
-    "scanUnits": "M",
-    "scaleFactor": 1.0
+  "measurements": {
+    "headCircumferenceCm": 57.0,
+    "frontToBackArcCm": 36.0,
+    "earToEarOverCm": 34.0,
+    "earToEarBackCm": 36.0,
+    "headWidthCm": 15.5,
+    "headDepthCm": 19.5,
+    "headHeightCm": 13.0,
+    "foreheadWidthCm": 12.5,
+    "napeWidthCm": 13.0,
+    "foreheadHeightCm": 6.0
   },
   "crop": {
     "edgeRatio": 0.25

@@ -1,7 +1,6 @@
 import bpy
 from bpy.props import (
     FloatProperty,
-    IntProperty,
     StringProperty,
     EnumProperty,
     BoolProperty,
@@ -12,41 +11,72 @@ from bpy.props import (
 class HWG_SceneProps(bpy.types.PropertyGroup):
     """All helmet wig generator settings, stored per-scene."""
 
-    # --- Input ---
-    scan_object: PointerProperty(
-        name="Scan Object",
-        description="The imported head scan mesh",
-        type=bpy.types.Object,
-        poll=lambda self, obj: obj.type == 'MESH',
+    # --- Measurements (user-facing: cm) ---
+    head_circumference_cm: FloatProperty(
+        name="Head Circumference",
+        description="Tape around widest part: forehead, over ears, around occipital bump (cm)",
+        default=57.0,
+        min=1.0, soft_min=50.0, soft_max=65.0, max=100.0,
     )
-    meta_json_path: StringProperty(
-        name="meta.json",
-        description="Path to the scan metadata JSON file",
-        subtype='FILE_PATH',
-        default="",
+    front_to_back_arc_cm: FloatProperty(
+        name="Front-to-Back Arc",
+        description="Forehead hairline, over crown, down to nape (cm)",
+        default=36.0,
+        min=1.0, soft_min=33.0, soft_max=40.0, max=60.0,
     )
-
-    # --- Scale ---
-    scan_units: EnumProperty(
-        name="Scan Units",
-        items=[
-            ('M', "Meters", "Scan is in meters (ARKit default)"),
-            ('MM', "Millimeters", "Scan is already in mm"),
-        ],
-        default='M',
+    ear_to_ear_over_cm: FloatProperty(
+        name="Ear-to-Ear Over Top",
+        description="Top of left ear, over crown, to top of right ear (cm)",
+        default=34.0,
+        min=1.0, soft_min=30.0, soft_max=38.0, max=55.0,
     )
-    scale_factor: FloatProperty(
-        name="Scale Factor",
-        description="Computed or manual scale correction factor",
-        default=1.0,
-        min=0.01,
-        max=100.0,
+    ear_to_ear_back_cm: FloatProperty(
+        name="Ear-to-Ear Around Back",
+        description="Top of left ear, around back of head, to top of right ear (cm)",
+        default=36.0,
+        min=1.0, soft_min=30.0, soft_max=42.0, max=60.0,
+    )
+    head_width_cm: FloatProperty(
+        name="Head Width",
+        description="Side-to-side straight-line at widest point above ears (cm)",
+        default=15.5,
+        min=1.0, soft_min=13.0, soft_max=18.0, max=25.0,
+    )
+    head_depth_cm: FloatProperty(
+        name="Head Depth",
+        description="Forehead to back of skull straight-line at widest (cm)",
+        default=19.5,
+        min=1.0, soft_min=17.0, soft_max=23.0, max=30.0,
+    )
+    head_height_cm: FloatProperty(
+        name="Head Height",
+        description="Ear-top level to crown, straight-line (cm)",
+        default=13.0,
+        min=1.0, soft_min=10.0, soft_max=16.0, max=25.0,
+    )
+    forehead_width_cm: FloatProperty(
+        name="Forehead Width",
+        description="Temple to temple, straight across (cm)",
+        default=12.5,
+        min=1.0, soft_min=10.0, soft_max=15.0, max=20.0,
+    )
+    nape_width_cm: FloatProperty(
+        name="Nape Width",
+        description="Width at nape / base of skull (cm)",
+        default=13.0,
+        min=1.0, soft_min=10.0, soft_max=16.0, max=20.0,
+    )
+    forehead_height_cm: FloatProperty(
+        name="Forehead Height",
+        description="Hairline to brow ridge, measured flat (cm)",
+        default=6.0,
+        min=1.0, soft_min=4.0, soft_max=8.0, max=12.0,
     )
 
     # --- Crop ---
     edge_ratio: FloatProperty(
         name="Edge Ratio",
-        description="Bottom cut height as fraction of scan height (0.25 = cut bottom 25%)",
+        description="Bottom cut height as fraction of head height (0.25 = cut bottom 25%)",
         default=0.25,
         min=0.05,
         max=0.60,
@@ -55,7 +85,7 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     # --- Base ---
     clearance_mm: FloatProperty(
         name="Clearance (mm)",
-        description="Outward offset from scan surface for wig cap + comfort",
+        description="Outward offset from head surface for wig cap + comfort",
         default=4.0,
         min=0.0,
         max=20.0,

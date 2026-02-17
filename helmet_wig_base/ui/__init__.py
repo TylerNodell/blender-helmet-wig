@@ -1,7 +1,7 @@
 from . import panels
 
 classes = (
-    panels.HWG_PT_Input,
+    panels.HWG_PT_Measurements,
     panels.HWG_PT_Base,
     panels.HWG_PT_Vents,
     panels.HWG_PT_Export,

@@ -1,9 +1,9 @@
 import bpy
 
 
-class HWG_PT_Input(bpy.types.Panel):
-    bl_label = "Input"
-    bl_idname = "HWG_PT_Input"
+class HWG_PT_Measurements(bpy.types.Panel):
+    bl_label = "Measurements"
+    bl_idname = "HWG_PT_Measurements"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'HelmetWig'
@@ -14,13 +14,25 @@ class HWG_PT_Input(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
 
-        layout.prop(props, "scan_object")
-        layout.prop(props, "meta_json_path")
-        layout.operator("hwg.load_meta", icon='IMPORT')
+        layout.prop(props, "head_circumference_cm")
 
-        layout.separator()
-        layout.prop(props, "scan_units")
-        layout.prop(props, "scale_factor")
+        box = layout.box()
+        box.label(text="Arc Measurements", icon='CURVE_DATA')
+        box.prop(props, "front_to_back_arc_cm")
+        box.prop(props, "ear_to_ear_over_cm")
+        box.prop(props, "ear_to_ear_back_cm")
+
+        box = layout.box()
+        box.label(text="Dimensions", icon='EMPTY_ARROWS')
+        box.prop(props, "head_width_cm")
+        box.prop(props, "head_depth_cm")
+        box.prop(props, "head_height_cm")
+
+        box = layout.box()
+        box.label(text="Contour Details", icon='MOD_SMOOTH')
+        box.prop(props, "forehead_width_cm")
+        box.prop(props, "nape_width_cm")
+        box.prop(props, "forehead_height_cm")
 
 
 class HWG_PT_Base(bpy.types.Panel):
