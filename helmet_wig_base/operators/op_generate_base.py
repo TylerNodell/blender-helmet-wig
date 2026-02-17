@@ -2,12 +2,14 @@
 
 Pipeline:
 1. Duplicate the scan object as a working copy
-2. Bisect to cut the bottom (edge ratio controls how much to keep)
-3. Fill holes from incomplete scans
-4. Apply clearance offset (Solidify outward)
-5. Apply shell thickness (Solidify inward)
-6. Add rim band reinforcement along the bottom edge
-7. Recalculate normals
+2. Clean the mesh (remove doubles, fix normals, delete loose geometry)
+3. Voxel remesh for a clean, uniform topology (critical for scan data)
+4. Smooth to remove remesh blockiness
+5. Bisect to cut the bottom (edge ratio controls how much to keep)
+6. Apply clearance offset via vertex normal displacement
+7. Apply shell thickness (Solidify modifier)
+8. Add rim band reinforcement along the bottom edge
+9. Recalculate normals
 
 The scan should already be in mm and centered (handled by the import operator).
 """
@@ -43,6 +45,29 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         work.select_set(True)
         context.view_layer.objects.active = work
 
+        # --- Step 1: Clean the raw scan mesh ---
+        self._clean_mesh(work)
+
+        # --- Step 2: Voxel remesh for uniform topology ---
+        # Raw scan meshes have inconsistent topology, holes, and
+        # non-manifold edges. Voxel remesh creates a clean, watertight
+        # mesh that Solidify can work with reliably.
+        # Voxel size of 1.5mm gives good detail while smoothing out
+        # scan noise. Adjust if needed for very detailed/coarse scans.
+        work.data.remesh_voxel_size = 1.5  # mm
+        work.data.use_remesh_fix_poles = True
+        work.data.use_remesh_smooth_normals = True
+        work.data.use_remesh_preserve_volume = True
+        with bpy.context.temp_override(object=work, active_object=work):
+            bpy.ops.object.voxel_remesh()
+
+        # --- Step 3: Smooth to remove remesh blockiness ---
+        mod_smooth = work.modifiers.new("HWG_Smooth", 'SMOOTH')
+        mod_smooth.factor = 0.5
+        mod_smooth.iterations = 5
+        with bpy.context.temp_override(object=work, active_object=work):
+            bpy.ops.object.modifier_apply(modifier=mod_smooth.name)
+
         # --- Compute bounding box for edge cut ---
         bbox = [work.matrix_world @ Vector(corner) for corner in work.bound_box]
         z_vals = [v.z for v in bbox]
@@ -50,7 +75,7 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         height = max(0.001, z_max - z_min)
         edge_z = z_min + height * props.edge_ratio
 
-        # --- Cut bottom (remove below edge_z) ---
+        # --- Step 4: Cut bottom (remove below edge_z) ---
         with bpy.context.temp_override(
             object=work, active_object=work, selected_objects=[work]
         ):
@@ -61,50 +86,18 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 plane_no=(0, 0, 1),
                 clear_inner=True,
                 clear_outer=False,
-                use_fill=True,
+                use_fill=False,  # leave open — we want a shell, not a solid
             )
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # --- Hole filling (prevent solidify artifacts on incomplete scans) ---
-        with bpy.context.temp_override(
-            object=work, active_object=work, selected_objects=[work]
-        ):
-            bpy.ops.object.mode_set(mode='EDIT')
-
-            me = work.data
-            bm = bmesh.from_edit_mesh(me)
-
-            # Select boundary edges (holes in the mesh)
-            bpy.ops.mesh.select_all(action='DESELECT')
-            bpy.ops.mesh.select_non_manifold(
-                extend=False,
-                use_wire=False,
-                use_boundary=True,
-                use_multi_face=False,
-                use_non_contiguous=False,
-                use_verts=False,
-            )
-
-            # Fill holes
-            bpy.ops.mesh.edge_face_add()
-            bpy.ops.mesh.fill_holes(sides=0)
-
-            bmesh.update_edit_mesh(me)
-            bpy.ops.mesh.select_all(action='DESELECT')
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        # --- Clearance offset (push surface outward) ---
+        # --- Step 5: Clearance offset via vertex normals ---
+        # Push every vertex outward along its normal by clearance amount.
+        # This is more reliable than Solidify offset=1 on scan meshes.
         clearance_mm = props.clearance_mm
         if clearance_mm > 0:
-            mod_clear = work.modifiers.new("HWG_Clearance", 'SOLIDIFY')
-            mod_clear.thickness = clearance_mm
-            mod_clear.offset = 1.0  # push outward only
-            mod_clear.use_rim = False
-            mod_clear.use_even_offset = True
-            with bpy.context.temp_override(object=work, active_object=work):
-                bpy.ops.object.modifier_apply(modifier=mod_clear.name)
+            self._offset_along_normals(work, clearance_mm)
 
-        # --- Shell thickness ---
+        # --- Step 6: Shell thickness ---
         thickness_mm = props.thickness_mm
         mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
@@ -115,43 +108,12 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         with bpy.context.temp_override(object=work, active_object=work):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
-        # --- Rim band reinforcement ---
+        # --- Step 7: Rim band reinforcement ---
         rim_height_mm = props.rim_height_mm
         if rim_height_mm > 0:
-            with bpy.context.temp_override(
-                object=work, active_object=work, selected_objects=[work]
-            ):
-                bpy.ops.object.mode_set(mode='EDIT')
+            self._add_rim_band(work, edge_z, rim_height_mm)
 
-                me = work.data
-                bm = bmesh.from_edit_mesh(me)
-                bm.verts.ensure_lookup_table()
-                bm.edges.ensure_lookup_table()
-
-                # Select vertices near the bottom edge
-                bpy.ops.mesh.select_all(action='DESELECT')
-                z_threshold = edge_z + 2.0  # 2mm tolerance
-                for v in bm.verts:
-                    world_co = work.matrix_world @ v.co
-                    if world_co.z <= z_threshold:
-                        v.select = True
-
-                bmesh.update_edit_mesh(me)
-
-                bpy.ops.mesh.select_mode(type='EDGE')
-                bpy.ops.mesh.loop_multi_select(ring=False)
-
-                # Extrude downward to create the rim band
-                bpy.ops.mesh.extrude_region_move(
-                    TRANSFORM_OT_translate={
-                        "value": (0, 0, -rim_height_mm),
-                        "orient_type": 'GLOBAL',
-                    }
-                )
-
-                bpy.ops.object.mode_set(mode='OBJECT')
-
-        # --- Recalculate normals ---
+        # --- Step 8: Recalculate normals ---
         with bpy.context.temp_override(
             object=work, active_object=work, selected_objects=[work]
         ):
@@ -160,10 +122,94 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode='OBJECT')
 
+        vert_count = len(work.data.vertices)
         self.report(
             {'INFO'},
-            f"Generated: {work.name} "
-            f"(clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
-            f"rim={rim_height_mm}mm, edge_z={edge_z:.1f}mm)",
+            f"Generated: {work.name} ({vert_count:,} verts, "
+            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
+            f"rim={rim_height_mm}mm)",
         )
         return {'FINISHED'}
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _clean_mesh(self, obj):
+        """Clean a raw scan mesh: merge doubles, remove loose, fix normals."""
+        with bpy.context.temp_override(
+            object=obj, active_object=obj, selected_objects=[obj]
+        ):
+            bpy.ops.object.mode_set(mode='EDIT')
+
+            bm = bmesh.from_edit_mesh(obj.data)
+
+            # Remove duplicate vertices (within 0.1mm)
+            bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=0.1)
+
+            # Remove loose vertices and edges (not part of any face)
+            loose_verts = [v for v in bm.verts if not v.link_faces]
+            if loose_verts:
+                bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
+
+            loose_edges = [e for e in bm.edges if not e.link_faces]
+            if loose_edges:
+                bmesh.ops.delete(bm, geom=loose_edges, context='EDGES')
+
+            # Fix normals
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+
+            bmesh.update_edit_mesh(obj.data)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+    def _offset_along_normals(self, obj, distance):
+        """Push every vertex outward along its normal by distance (mm).
+
+        More reliable than Solidify offset=1 for scan meshes because
+        it doesn't depend on face connectivity or manifold topology.
+        """
+        me = obj.data
+        me.calc_normals_split()
+
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bm.verts.ensure_lookup_table()
+
+        for v in bm.verts:
+            v.co += v.normal * distance
+
+        bm.to_mesh(me)
+        bm.free()
+        me.update()
+
+    def _add_rim_band(self, obj, edge_z, rim_height_mm):
+        """Extrude the bottom boundary edge downward to create a rim band."""
+        with bpy.context.temp_override(
+            object=obj, active_object=obj, selected_objects=[obj]
+        ):
+            bpy.ops.object.mode_set(mode='EDIT')
+
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.verts.ensure_lookup_table()
+            bm.edges.ensure_lookup_table()
+
+            # Select boundary edges (the open bottom edge of the shell)
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bpy.ops.mesh.select_non_manifold(
+                extend=False,
+                use_wire=False,
+                use_boundary=True,
+                use_multi_face=False,
+                use_non_contiguous=False,
+                use_verts=False,
+            )
+
+            # Extrude downward to create the rim band
+            bpy.ops.mesh.extrude_region_move(
+                TRANSFORM_OT_translate={
+                    "value": (0, 0, -rim_height_mm),
+                    "orient_type": 'GLOBAL',
+                }
+            )
+
+            bpy.ops.object.mode_set(mode='OBJECT')
