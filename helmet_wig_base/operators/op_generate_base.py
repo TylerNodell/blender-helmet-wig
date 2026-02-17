@@ -111,15 +111,18 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
 
         # --- Step 7: Shell thickness ---
         # Use Solidify to create the shell wall. Key settings:
-        # - offset=1: the current surface (already pushed out by clearance)
-        #   becomes the INNER wall; shell grows OUTWARD by thickness amount
+        # - offset=-1: original surface becomes the OUTER wall; a second
+        #   surface is created inward by thickness amount. Since we already
+        #   pushed the mesh outward by clearance, the inner wall of the
+        #   shell sits at clearance distance from the head, and the outer
+        #   wall sits at clearance + thickness.
         # - use_even_offset=False: MUST be off — even offset explodes on
         #   open meshes with boundary edges from the bisect cut
         # - use_rim=True: closes the shell along the open bottom edge
         thickness_mm = props.thickness_mm
         mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
-        mod_shell.offset = 1.0
+        mod_shell.offset = -1.0
         mod_shell.use_rim = True
         mod_shell.use_rim_only = False
         mod_shell.use_even_offset = False
