@@ -119,9 +119,8 @@ def generate_head_mesh(
         back_ratio = max(0.85, min(1.15, back_ratio))
         back_depth *= back_ratio
 
-    # --- Occipital bump ---
-    occipital_bump_height = 0.25
-    occipital_bump_strength = half_depth * 0.08
+    # Note: the front/back depth split (0.85 / 1.15) already models the
+    # rounder occiput vs flatter forehead. No additional bump needed.
 
     # --- Generate vertex rings ---
     # The mesh extends from below ear level (t_min) to crown (t=1).
@@ -145,12 +144,6 @@ def generate_head_mesh(
         local_half_width = half_width * w_factor
         local_front = front_depth * d_factor
         local_back = back_depth * d_factor
-
-        # Occipital bump
-        bump_influence = math.exp(
-            -((t - occipital_bump_height) ** 2) / (2.0 * 0.08 ** 2)
-        )
-        local_back += occipital_bump_strength * bump_influence
 
         # Forehead flattening — subtly flattens the front curve shape
         # without significantly reducing the overall depth.
