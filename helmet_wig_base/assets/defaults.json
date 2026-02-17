@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "units": {
+    "scanUnits": "M",
+    "scaleFactor": 1.0
+  },
+  "crop": {
+    "edgeRatio": 0.25
+  },
+  "base": {
+    "clearanceMm": 4.0,
+    "thicknessMm": 2.8,
+    "rimHeightMm": 8.0
+  },
+  "vents": {
+    "enabled": true,
+    "pattern": "CIRCLES",
+    "radiusMm": 6.0,
+    "spacingMm": 18.0,
+    "marginMm": 15.0
+  }
+}
