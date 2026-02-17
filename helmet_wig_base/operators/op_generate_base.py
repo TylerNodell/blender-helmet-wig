@@ -89,30 +89,46 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             )
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # --- Step 5: Clearance offset via vertex normals ---
+        # --- Step 5: Recalc normals before offset/solidify ---
+        # Critical: normals must be consistent and outward-facing for
+        # both vertex normal offset and Solidify to work correctly.
+        with bpy.context.temp_override(
+            object=work, active_object=work, selected_objects=[work]
+        ):
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.normals_make_consistent(inside=False)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        # --- Step 6: Clearance offset via vertex normals ---
         # Push every vertex outward along its normal by clearance amount.
         # This is more reliable than Solidify offset=1 on scan meshes.
         clearance_mm = props.clearance_mm
         if clearance_mm > 0:
             self._offset_along_normals(work, clearance_mm)
 
-        # --- Step 6: Shell thickness ---
+        # --- Step 7: Shell thickness ---
+        # Use Solidify to create the shell wall. Key settings:
+        # - offset=-1: grows outward from the current (already offset) surface
+        # - use_even_offset=False: MUST be off — even offset explodes on
+        #   open meshes with boundary edges from the bisect cut
+        # - use_rim=True: closes the shell along the open bottom edge
         thickness_mm = props.thickness_mm
         mod_shell = work.modifiers.new("HWG_Shell", 'SOLIDIFY')
         mod_shell.thickness = thickness_mm
-        mod_shell.offset = -1.0  # grow outward from the offset surface
+        mod_shell.offset = -1.0
         mod_shell.use_rim = True
         mod_shell.use_rim_only = False
-        mod_shell.use_even_offset = True
+        mod_shell.use_even_offset = False
         with bpy.context.temp_override(object=work, active_object=work):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
-        # --- Step 7: Rim band reinforcement ---
+        # --- Step 8: Rim band reinforcement ---
         rim_height_mm = props.rim_height_mm
         if rim_height_mm > 0:
             self._add_rim_band(work, edge_z, rim_height_mm)
 
-        # --- Step 8: Recalculate normals ---
+        # --- Step 9: Final normals recalc ---
         with bpy.context.temp_override(
             object=work, active_object=work, selected_objects=[work]
         ):
