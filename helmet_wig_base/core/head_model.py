@@ -42,28 +42,24 @@ def _width_profile(t):
 
     Returns 0..1 where 1 = full width.
 
-    Uses a cosine-based curve: full width at t=0, smoothly and
-    continuously tapering to 0 at t=1. This naturally produces a
-    dome/skull shape without piecewise zones that create flat spots.
+    Uses an elliptical curve: sqrt(1 - t^n). This is literally the
+    cross-section of an ellipsoid — full width at the bottom, curving
+    smoothly to 0 at the top, with the characteristic "steep sides
+    then rounded dome" shape of a real skull.
 
-    An exponent < 1 on t stretches the full-width region (making the
-    sides more vertical before curving over), while the cosine ensures
-    the crown is smoothly rounded.
+    Higher exponent n → sides stay vertical longer before curving.
+    n=2.0 is a perfect circle. n=2.4 gives slightly more vertical sides.
     """
-    # Remap t with a power curve to keep sides fuller longer.
-    # t_adj < t means the profile stays near 1.0 longer before dropping.
-    t_adj = t ** 0.7
-    return max(0.0, math.cos(t_adj * math.pi / 2.0))
+    return math.sqrt(max(0.0, 1.0 - t ** 2.4))
 
 
 def _depth_profile(t):
     """Depth factor from ear level (t=0) to crown (t=1).
 
-    Same cosine shape but slightly fuller (exponent 0.6 instead of 0.7)
-    since the head is longer front-to-back and holds its depth higher.
+    Slightly fuller than width (exponent 2.2 vs 2.4) since the head
+    is longer front-to-back.
     """
-    t_adj = t ** 0.6
-    return max(0.0, math.cos(t_adj * math.pi / 2.0))
+    return math.sqrt(max(0.0, 1.0 - t ** 2.2))
 
 
 def generate_head_mesh(
