@@ -129,30 +129,46 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Step 4: Shrinkwrap onto trimmed scan ---
+        # Shrinkwrap offset is in Blender units, which are affected by
+        # scene unit scale. Divide by unit_scale to get actual mm.
         clearance_mm = props.clearance_mm
+        unit_scale = context.scene.unit_settings.scale_length
+        shrink_offset = clearance_mm / unit_scale
+
         mod_shrink = dome.modifiers.new("HWG_Shrinkwrap", 'SHRINKWRAP')
         mod_shrink.wrap_method = 'NEAREST_SURFACEPOINT'
         mod_shrink.wrap_mode = 'OUTSIDE_SURFACE'
         mod_shrink.target = target
-        mod_shrink.offset = clearance_mm
+        mod_shrink.offset = shrink_offset
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_shrink.name)
 
-        # --- Step 5: Smooth ---
+        # --- Step 5: Smooth (very light — just remove faceting) ---
         mod_smooth2 = dome.modifiers.new("HWG_Smooth", 'SMOOTH')
-        mod_smooth2.factor = 0.5
-        mod_smooth2.iterations = 3
+        mod_smooth2.factor = 0.3
+        mod_smooth2.iterations = 2
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_smooth2.name)
 
+        # --- Debug: measure bounding box before solidify ---
+        bbox_pre = [dome.matrix_world @ Vector(c) for c in dome.bound_box]
+        x_pre = max(v.x for v in bbox_pre) - min(v.x for v in bbox_pre)
+        y_pre = max(v.y for v in bbox_pre) - min(v.y for v in bbox_pre)
+        z_pre = max(v.z for v in bbox_pre) - min(v.z for v in bbox_pre)
+
         # --- Step 6: Solidify ---
+        # Check Blender scene unit scale — if not 1.0, thickness must
+        # be divided by it since Solidify works in Blender units.
         thickness_mm = props.thickness_mm
+        unit_scale = context.scene.unit_settings.scale_length
+        solidify_thickness = thickness_mm / unit_scale
+
         mod_shell = dome.modifiers.new("HWG_Shell", 'SOLIDIFY')
-        mod_shell.thickness = thickness_mm
+        mod_shell.thickness = solidify_thickness
         mod_shell.offset = -1.0  # grow outward
         mod_shell.use_rim = True
         mod_shell.use_rim_only = False
-        mod_shell.use_even_offset = True
+        mod_shell.use_even_offset = False
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_shell.name)
 
@@ -181,7 +197,9 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         self.report(
             {'INFO'},
             f"Generated: {dome.name} ({vert_count:,} verts, "
-            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm)",
+            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
+            f"unit_scale={unit_scale}, "
+            f"pre-solidify bbox: {x_pre:.1f}x{y_pre:.1f}x{z_pre:.1f})",
         )
         return {'FINISHED'}
 
