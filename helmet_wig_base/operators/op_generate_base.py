@@ -13,6 +13,9 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         props = context.scene.hwg
 
         # --- Generate parametric head mesh from measurements (cm -> mm) ---
+        # The head model now builds the contoured edge line directly into
+        # the mesh — no flat bisect cut needed. The edge_ratio controls
+        # how much of the lower head is included.
         from ..core.head_model import generate_head_mesh
 
         bm = generate_head_mesh(
@@ -26,6 +29,7 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             forehead_width_mm=props.forehead_width_cm * 10.0,
             nape_width_mm=props.nape_width_cm * 10.0,
             forehead_height_mm=props.forehead_height_cm * 10.0,
+            edge_ratio=props.edge_ratio,
         )
 
         # --- Create Blender object from bmesh ---
@@ -40,25 +44,21 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         work.select_set(True)
         context.view_layer.objects.active = work
 
-        # --- Compute bounding box for edge cut ---
-        bbox = [work.matrix_world @ Vector(corner) for corner in work.bound_box]
-        z_vals = [v.z for v in bbox]
-        z_min, z_max = min(z_vals), max(z_vals)
-        height = max(0.001, z_max - z_min)
-        edge_z = z_min + height * props.edge_ratio
-
-        # --- Cut bottom (remove below edge_z) ---
-        # use_fill=False: we want an open bottom edge, not a sealed cap
+        # --- Delete the bottom cap face to create an open shell ---
+        # The head model includes a bottom cap for manifold-ness,
+        # but we need the bottom open for solidify to work correctly.
         with bpy.context.temp_override(object=work, active_object=work, selected_objects=[work]):
             bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.bisect(
-                plane_co=(0, 0, edge_z),
-                plane_no=(0, 0, 1),
-                clear_inner=True,
-                clear_outer=False,
-                use_fill=False,
-            )
+            me = work.data
+            bm_edit = bmesh.from_edit_mesh(me)
+            bm_edit.faces.ensure_lookup_table()
+
+            # Find and delete the bottom cap face (the n-gon at the bottom).
+            # It's the face with the most vertices (u_segments sides).
+            cap_face = max(bm_edit.faces, key=lambda f: len(f.verts))
+            bmesh.ops.delete(bm_edit, geom=[cap_face], context='FACES')
+
+            bmesh.update_edit_mesh(me)
             bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Clearance offset (move vertices outward along normals) ---
@@ -143,6 +143,6 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             {'INFO'},
             f"Generated: {work.name} "
             f"(clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
-            f"rim={rim_height_mm}mm, edge_z={edge_z:.1f}mm)"
+            f"rim={rim_height_mm}mm, edge_ratio={props.edge_ratio:.0%})"
         )
         return {'FINISHED'}
