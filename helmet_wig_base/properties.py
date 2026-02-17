@@ -42,10 +42,10 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     # --- Crop ---
     edge_ratio: FloatProperty(
         name="Edge Ratio",
-        description="Bottom cut height as fraction of scan height (0.25 = cut bottom 25%)",
-        default=0.25,
+        description="Bottom cut height as fraction of scan height (0.45 = cut bottom 45%, keeping top 55% as helmet)",
+        default=0.45,
         min=0.05,
-        max=0.60,
+        max=0.70,
     )
 
     # --- Base ---
