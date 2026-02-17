@@ -10,16 +10,31 @@ def _edge_z_at_angle(angle, height, forehead_height_mm, edge_ratio):
 
     angle: 0 = right ear, pi/2 = front, pi = left ear, 3pi/2 = back.
 
-    Returns Z in mm. The contour is:
-    - Front (forehead): highest — sits above the brow
-    - Sides (ears): lowest — just above ears
-    - Back (nape): medium-low — covers occipital area
-    """
-    base_z = height * edge_ratio
+    The helmet edge is defined by how far DOWN from the crown each zone
+    extends. Think of it as "the helmet covers the top X% of the head":
 
-    front_z = base_z + forehead_height_mm * 0.3
-    side_z = base_z - height * 0.05
-    back_z = base_z - height * 0.08
+    - edge_ratio controls overall coverage (0.25 = helmet covers top 75%
+      of the head height... but in practice we want to cut more)
+    - Front (forehead): the hairline — uses forehead_height to set how
+      far down the front of the helmet extends
+    - Sides (ears): extends down to just above ear-top level
+    - Back (nape): extends lower than sides to cover occipital area
+
+    Returns Z in mm from origin (ear-top level = Z=0).
+    """
+    # Front edge: sits at forehead_height below crown.
+    # forehead_height is hairline-to-brow, so the helmet edge at the
+    # front is at crown_z - forehead_height (roughly at the hairline).
+    front_z = height - forehead_height_mm
+
+    # Side edge: just above ear-top level (Z=0). The ear-to-ear arc
+    # goes over the top, so the helmet should sit just above the ears.
+    # A small positive Z keeps it above the ear attachment point.
+    side_z = height * 0.08
+
+    # Back edge: lower than sides — covers the occipital bump area.
+    # Typically about 15-20% of head height above ear level.
+    back_z = height * 0.03
 
     sin_a = math.sin(angle)
     cos_a = math.cos(angle)
@@ -31,7 +46,7 @@ def _edge_z_at_angle(angle, height, forehead_height_mm, edge_ratio):
     total_w = front_w + back_w + side_w
     if total_w > 0:
         return (front_z * front_w + back_z * back_w + side_z * side_w) / total_w
-    return base_z
+    return height * 0.08
 
 
 class HWG_OT_GenerateBase(bpy.types.Operator):
