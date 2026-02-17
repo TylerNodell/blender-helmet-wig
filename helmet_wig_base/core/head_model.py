@@ -152,9 +152,11 @@ def generate_head_mesh(
         )
         local_back += occipital_bump_strength * bump_influence
 
-        # Forehead flattening
-        if t < 0.4:
-            forehead_flatten = 0.40 * (1.0 - _smoothstep(t / 0.4))
+        # Forehead flattening — subtly flattens the front curve shape
+        # without significantly reducing the overall depth.
+        # Strength 0.15 means at most 15% compression of front Y.
+        if t < 0.35:
+            forehead_flatten = 0.15 * (1.0 - _smoothstep(t / 0.35))
         else:
             forehead_flatten = 0.0
 
