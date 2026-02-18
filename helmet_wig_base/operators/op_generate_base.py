@@ -192,6 +192,28 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_shrink.name)
 
+        # --- Step 4b: Remove vertices that folded under during Shrinkwrap ---
+        # Any dome vertex that ended up below the lowest hairline point
+        # must have wrapped to the underside of the scan (jaw/neck). The
+        # dome was bisected at min_hairline_z - 5mm, so vertices below
+        # min_hairline_z after Shrinkwrap have folded inward. Delete them.
+        if props.shell_mode == 'WIG_CAP' and hairline_json:
+            hairline_pts = json.loads(hairline_json)
+            min_hz = min(p[2] for p in hairline_pts)
+            with bpy.context.temp_override(
+                object=dome, active_object=dome, selected_objects=[dome]
+            ):
+                bpy.ops.object.mode_set(mode='EDIT')
+                bm = bmesh.from_edit_mesh(dome.data)
+                bm.verts.ensure_lookup_table()
+                mat_d = dome.matrix_world
+                # Delete verts below the lowest hairline Z
+                folded = [v for v in bm.verts if (mat_d @ v.co).z < min_hz]
+                if folded:
+                    bmesh.ops.delete(bm, geom=folded, context='VERTS')
+                bmesh.update_edit_mesh(dome.data)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
         # --- Step 5: Hairline contour trim (immediately after Shrinkwrap) ---
         # Now the dome vertices sit on the scan surface + clearance, so the
         # flood-fill barrier (8mm) will find dome vertices near the hairline
@@ -229,17 +251,43 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             object=dome, active_object=dome, selected_objects=[dome]
         ):
             bpy.ops.object.mode_set(mode='EDIT')
+
+            # 9a: Keep only the largest connected component.
+            # Solidify can create disconnected internal flaps from
+            # the folded edge geometry. Remove anything that isn't
+            # the main shell.
+            bm = bmesh.from_edit_mesh(dome.data)
+            bm.verts.ensure_lookup_table()
+            if bm.verts:
+                from collections import deque as _deque
+                mat_d = dome.matrix_world
+                crown_v = max(bm.verts, key=lambda v: (mat_d @ v.co).z)
+                main = set()
+                qf = _deque([crown_v.index])
+                main.add(crown_v.index)
+                while qf:
+                    vi = qf.popleft()
+                    for edge in bm.verts[vi].link_edges:
+                        oi = edge.other_vert(bm.verts[vi]).index
+                        if oi not in main:
+                            main.add(oi)
+                            qf.append(oi)
+                frags = [v for v in bm.verts if v.index not in main]
+                if frags:
+                    bmesh.ops.delete(bm, geom=frags, context='VERTS')
+                bmesh.update_edit_mesh(dome.data)
+
             bpy.ops.mesh.select_all(action='SELECT')
 
-            # Merge overlapping verts from Solidify edge artifacts
+            # 9b: Merge overlapping verts from Solidify edge artifacts
             bpy.ops.mesh.remove_doubles(threshold=0.1)
 
-            # Clean up loose geometry
+            # 9c: Clean up loose geometry
             bpy.ops.mesh.select_all(action='DESELECT')
             bpy.ops.mesh.select_loose()
             bpy.ops.mesh.delete(type='VERT')
 
-            # Final normals
+            # 9d: Final normals
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -510,7 +558,60 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bmesh.update_edit_mesh(obj.data)
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # --- Step 5: Smooth boundary edge via vertex group + modifier ---
+        # --- Step 5a: Subdivide the edge region for higher vertex density ---
+        # The boundary area has too few vertices for smooth modifier to
+        # create a clean, organic edge. Select boundary faces (within a
+        # few rings of the open edge) and subdivide them once to double
+        # the vertex count there.
+        with bpy.context.temp_override(
+            object=obj, active_object=obj, selected_objects=[obj]
+        ):
+            bpy.ops.object.mode_set(mode='EDIT')
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.verts.ensure_lookup_table()
+            bm.edges.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
+
+            # Find boundary verts
+            boundary_verts = set()
+            for v in bm.verts:
+                for e in v.link_edges:
+                    if e.is_boundary:
+                        boundary_verts.add(v.index)
+                        break
+
+            # Grow 6 rings inward from boundary
+            edge_region = set(boundary_verts)
+            current_ring = set(boundary_verts)
+            for _ in range(6):
+                next_ring = set()
+                for vi in current_ring:
+                    for e in bm.verts[vi].link_edges:
+                        oi = e.other_vert(bm.verts[vi]).index
+                        if oi not in edge_region:
+                            edge_region.add(oi)
+                            next_ring.add(oi)
+                current_ring = next_ring
+
+            # Collect faces that have ALL verts in the edge region
+            edge_faces = [
+                f for f in bm.faces
+                if all(v.index in edge_region for v in f.verts)
+            ]
+
+            if edge_faces:
+                # Subdivide those faces once
+                bmesh.ops.subdivide_edges(
+                    bm,
+                    edges=list({e for f in edge_faces for e in f.edges}),
+                    cuts=1,
+                    use_grid_fill=True,
+                )
+
+            bmesh.update_edit_mesh(obj.data)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        # --- Step 5b: Smooth boundary edge via vertex group + modifier ---
         # Create vertex group in object mode to avoid stale references.
         # Use a wide smooth region and aggressive smoothing
         # so Solidify's rim faces form a clean, flat bottom edge.
@@ -527,7 +628,7 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bm = bmesh.from_edit_mesh(obj.data)
             bm.verts.ensure_lookup_table()
 
-            # Find boundary verts (verts on open edges)
+            # Find boundary verts (re-detect after subdivision)
             boundary_verts = set()
             for v in bm.verts:
                 for e in v.link_edges:
