@@ -105,8 +105,8 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
 
         bpy.ops.object.select_all(action='DESELECT')
         bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=64,
-            ring_count=32,
+            segments=128,
+            ring_count=64,
             radius=radius,
             location=(center_x, center_y, center_z),
         )
@@ -144,8 +144,8 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
 
         # --- Step 5: Smooth (very light — just remove faceting) ---
         mod_smooth2 = dome.modifiers.new("HWG_Smooth", 'SMOOTH')
-        mod_smooth2.factor = 0.3
-        mod_smooth2.iterations = 2
+        mod_smooth2.factor = 0.5
+        mod_smooth2.iterations = 4
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_smooth2.name)
 
