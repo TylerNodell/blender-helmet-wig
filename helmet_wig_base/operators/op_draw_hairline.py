@@ -11,13 +11,18 @@ points are shown in orange and a live smoothed preview in cyan.
 """
 
 import bpy
-import gpu
 import json
 import math
-from gpu_extras.batch import batch_for_shader
-from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+
+# GPU and viewport modules are unavailable in headless (--background) mode.
+# Guard imports so the module can still be loaded headless for the JSON
+# hairline data and smoothing functions.
+if not bpy.app.background:
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    from bpy_extras import view3d_utils
 
 
 # ------------------------------------------------------------------
@@ -405,8 +410,9 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         Pipeline:
         1. Catmull-Rom spline + even resampling (2mm)
         2. Re-project onto mesh surface
-        3. Store as JSON
-        4. Update persistent overlay
+        3. Store as JSON on scene property
+        4. Auto-save to tests/fixtures/ for automated testing
+        5. Update persistent overlay
         """
         bpy.types.SpaceView3D.draw_handler_remove(self._draw_handle, 'WINDOW')
         context.area.header_text_set(None)
@@ -423,13 +429,62 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
 
         # Store as JSON on scene property
         pts_list = [[p.x, p.y, p.z] for p in smoothed]
-        context.scene.hwg.hairline_points_json = json.dumps(pts_list)
+        hairline_json = json.dumps(pts_list)
+        context.scene.hwg.hairline_points_json = hairline_json
+
+        # Auto-save to tests/fixtures/ for headless testing.
+        # File: tests/fixtures/hairline_<scan_name>_<N>.json
+        # N auto-increments so each draw creates a new fixture.
+        self._auto_save_fixture(context, hairline_json)
 
         # Update the persistent green overlay to show the final line
         refresh_persistent_overlay(context)
 
         self.report({'INFO'}, f"Hairline set: {len(smoothed)} points")
         context.area.tag_redraw()
+
+    def _auto_save_fixture(self, context, hairline_json):
+        """Save hairline JSON to tests/fixtures/ for automated testing."""
+        import os
+
+        # Find the repo root (parent of helmet_wig_base/)
+        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        repo_root = os.path.dirname(addon_dir)
+        fixtures_dir = os.path.join(repo_root, "tests", "fixtures")
+
+        # Create fixtures dir if needed
+        os.makedirs(fixtures_dir, exist_ok=True)
+
+        # Get scan object name for the filename
+        scan_name = "unknown"
+        props = context.scene.hwg
+        if props.scan_object:
+            # Clean the name for use in a filename
+            scan_name = props.scan_object.name
+            scan_name = scan_name.replace(" ", "_").replace(".", "_")
+
+        # Find next available number
+        n = 1
+        while True:
+            filename = f"hairline_{scan_name}_{n}.json"
+            filepath = os.path.join(fixtures_dir, filename)
+            if not os.path.exists(filepath):
+                break
+            n += 1
+
+        # Save
+        try:
+            with open(filepath, "w") as f:
+                f.write(hairline_json)
+            self.report(
+                {'INFO'},
+                f"Hairline saved: {filename}",
+            )
+        except (IOError, OSError) as e:
+            self.report(
+                {'WARNING'},
+                f"Could not auto-save hairline fixture: {e}",
+            )
 
     def _cancel(self, context):
         """Discard drawn points and clean up."""
