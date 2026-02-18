@@ -12,32 +12,28 @@ from bpy.props import (
 class HWG_SceneProps(bpy.types.PropertyGroup):
     """All helmet wig generator settings, stored per-scene."""
 
-    # --- Input ---
+    # --- Input (Scan) ---
     scan_object: PointerProperty(
         name="Scan Object",
         description="The imported head scan mesh",
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'MESH',
     )
-    meta_json_path: StringProperty(
-        name="meta.json",
-        description="Path to the scan metadata JSON file",
-        subtype='FILE_PATH',
-        default="",
-    )
 
     # --- Scale ---
     scan_units: EnumProperty(
         name="Scan Units",
+        description="Unit system of the imported scan file",
         items=[
-            ('M', "Meters", "Scan is in meters (ARKit default)"),
+            ('M', "Meters", "Scan is in meters (ARKit / Polycam / Scaniverse default)"),
+            ('CM', "Centimeters", "Scan is in centimeters"),
             ('MM', "Millimeters", "Scan is already in mm"),
         ],
         default='M',
     )
     scale_factor: FloatProperty(
         name="Scale Factor",
-        description="Computed or manual scale correction factor",
+        description="Additional manual scale correction (applied on top of unit conversion)",
         default=1.0,
         min=0.01,
         max=100.0,
@@ -46,17 +42,17 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     # --- Crop ---
     edge_ratio: FloatProperty(
         name="Edge Ratio",
-        description="Bottom cut height as fraction of scan height (0.25 = cut bottom 25%)",
-        default=0.25,
+        description="Bottom cut height as fraction of scan height (0.45 = cut bottom 45%, keeping top 55% as helmet)",
+        default=0.45,
         min=0.05,
-        max=0.60,
+        max=0.70,
     )
 
     # --- Base ---
     clearance_mm: FloatProperty(
         name="Clearance (mm)",
-        description="Outward offset from scan surface for wig cap + comfort",
-        default=4.0,
+        description="Outward offset from scan surface for foam liner + comfort (2mm for 2mm EVA foam)",
+        default=2.0,
         min=0.0,
         max=20.0,
     )
@@ -69,8 +65,8 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     )
     rim_height_mm: FloatProperty(
         name="Rim Height (mm)",
-        description="Height of the stiffening rim band at the bottom edge",
-        default=8.0,
+        description="Height of the stiffening rim band at the bottom edge (0 = no rim band)",
+        default=0.0,
         min=0.0,
         max=30.0,
     )

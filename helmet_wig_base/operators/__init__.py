@@ -1,10 +1,10 @@
-from . import op_load_meta
+from . import op_import_scan
 from . import op_generate_base
 from . import op_add_vents
 from . import op_export_stl
 
 classes = (
-    op_load_meta.HWG_OT_LoadMeta,
+    op_import_scan.HWG_OT_ImportScan,
     op_generate_base.HWG_OT_GenerateBase,
     op_add_vents.HWG_OT_AddVents,
     op_export_stl.HWG_OT_ExportSTL,

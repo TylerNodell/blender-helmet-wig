@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Helmet Wig Base Generator",
     "author": "Tyler Nodell",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > HelmetWig",
-    "description": "Generate 3D-printable helmet wig bases from head scan meshes.",
+    "description": "Generate 3D-printable helmet wig bases from iPhone LiDAR head scans.",
     "category": "Object",
 }
 

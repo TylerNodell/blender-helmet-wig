@@ -1,11 +1,15 @@
+"""Export the helmet base as STL with a sidecar JSON metadata file."""
+
 import bpy
 import os
 import json
 from datetime import datetime
+from mathutils import Vector
 
 
 class HWG_OT_ExportSTL(bpy.types.Operator):
     """Export the helmet base as STL + sidecar JSON."""
+
     bl_idname = "hwg.export_stl"
     bl_label = "Export STL"
     bl_options = {'REGISTER'}
@@ -54,10 +58,6 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
 
         # Write sidecar JSON
         json_path = os.path.join(export_dir, f"helmet_base_{timestamp}.json")
-        bbox = [obj.matrix_world @ bpy.mathutils.Vector(c) for c in obj.bound_box]
-
-        # Safer: import mathutils at module level or inline
-        from mathutils import Vector
         bbox = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
 
         sidecar = {
@@ -65,7 +65,10 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
             "exportTimestamp": datetime.now().isoformat(),
             "units": "mm",
             "sourceObject": obj.name,
+            "scanObject": props.scan_object.name if props.scan_object else None,
             "parameters": {
+                "scanUnits": props.scan_units,
+                "scaleFactor": props.scale_factor,
                 "clearanceMm": props.clearance_mm,
                 "thicknessMm": props.thickness_mm,
                 "edgeRatio": props.edge_ratio,
@@ -76,8 +79,16 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
                 "ventSpacingMm": props.vent_spacing_mm,
             },
             "boundingBox": {
-                "minMm": [min(v.x for v in bbox), min(v.y for v in bbox), min(v.z for v in bbox)],
-                "maxMm": [max(v.x for v in bbox), max(v.y for v in bbox), max(v.z for v in bbox)],
+                "minMm": [
+                    min(v.x for v in bbox),
+                    min(v.y for v in bbox),
+                    min(v.z for v in bbox),
+                ],
+                "maxMm": [
+                    max(v.x for v in bbox),
+                    max(v.y for v in bbox),
+                    max(v.z for v in bbox),
+                ],
             },
             "stlFile": stl_name,
         }

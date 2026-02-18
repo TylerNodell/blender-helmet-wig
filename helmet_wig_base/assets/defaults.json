@@ -1,16 +1,16 @@
 {
   "version": "1.0.0",
-  "units": {
-    "scanUnits": "M",
+  "scan": {
+    "units": "M",
     "scaleFactor": 1.0
   },
   "crop": {
-    "edgeRatio": 0.25
+    "edgeRatio": 0.45
   },
   "base": {
-    "clearanceMm": 4.0,
+    "clearanceMm": 2.0,
     "thicknessMm": 2.8,
-    "rimHeightMm": 8.0
+    "rimHeightMm": 0.0
   },
   "vents": {
     "enabled": true,
