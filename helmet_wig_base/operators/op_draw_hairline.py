@@ -4,6 +4,10 @@ The user clicks and drags on the scan surface to draw the hairline path.
 On confirm (Enter), the raw points are smoothed via Catmull-Rom spline,
 resampled to even spacing, re-projected onto the mesh, and stored as
 JSON on the scene properties for use by the generate operator.
+
+A persistent viewport overlay shows the stored hairline (green) so the
+user can always see where the final cut line is. During drawing, raw
+points are shown in orange and a live smoothed preview in cyan.
 """
 
 import bpy
@@ -15,6 +19,96 @@ from bpy_extras import view3d_utils
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
+
+# ------------------------------------------------------------------
+# Persistent hairline overlay (always visible when data exists)
+# ------------------------------------------------------------------
+
+_persistent_draw_handle = None
+_persistent_batch = None
+_persistent_shader = None
+
+
+def _persistent_draw_callback():
+    """Draw the stored hairline as a green line in the viewport."""
+    global _persistent_batch, _persistent_shader
+    if _persistent_batch is None or _persistent_shader is None:
+        return
+
+    gpu.state.depth_test_set('LESS_EQUAL')
+    gpu.state.depth_mask_set(False)
+    gpu.state.blend_set('ALPHA')
+
+    _persistent_shader.bind()
+    region = bpy.context.region
+    if region:
+        _persistent_shader.uniform_float("viewportSize", (region.width, region.height))
+    _persistent_shader.uniform_float("lineWidth", 4.0)
+    _persistent_shader.uniform_float("color", (0.0, 1.0, 0.3, 0.9))  # Green
+    _persistent_batch.draw(_persistent_shader)
+
+    gpu.state.blend_set('NONE')
+    gpu.state.depth_test_set('NONE')
+    gpu.state.depth_mask_set(True)
+
+
+def refresh_persistent_overlay(context=None):
+    """Rebuild the persistent overlay batch from stored hairline JSON.
+
+    Call this after hairline data changes (confirm, clear, load).
+    """
+    global _persistent_batch, _persistent_shader
+
+    scene = context.scene if context else bpy.context.scene
+    props = scene.hwg
+    hairline_json = props.hairline_points_json
+
+    if not hairline_json:
+        _persistent_batch = None
+        _persistent_shader = None
+        return
+
+    try:
+        pts = json.loads(hairline_json)
+    except (json.JSONDecodeError, TypeError):
+        _persistent_batch = None
+        _persistent_shader = None
+        return
+
+    if len(pts) < 2:
+        _persistent_batch = None
+        _persistent_shader = None
+        return
+
+    coords = [(p[0], p[1], p[2]) for p in pts]
+    _persistent_shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+    _persistent_batch = batch_for_shader(
+        _persistent_shader, 'LINE_STRIP', {"pos": coords}
+    )
+
+
+def register_persistent_overlay():
+    """Register the persistent draw handler (called once at addon registration)."""
+    global _persistent_draw_handle
+    if _persistent_draw_handle is None:
+        _persistent_draw_handle = bpy.types.SpaceView3D.draw_handler_add(
+            _persistent_draw_callback, (), 'WINDOW', 'POST_VIEW'
+        )
+
+
+def unregister_persistent_overlay():
+    """Unregister the persistent draw handler (called at addon unregistration)."""
+    global _persistent_draw_handle, _persistent_batch, _persistent_shader
+    if _persistent_draw_handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(_persistent_draw_handle, 'WINDOW')
+        _persistent_draw_handle = None
+    _persistent_batch = None
+    _persistent_shader = None
+
+
+# ------------------------------------------------------------------
+# Modal drawing operator
+# ------------------------------------------------------------------
 
 class HWG_OT_DrawHairline(bpy.types.Operator):
     """Draw the hairline on the scan mesh surface."""
@@ -41,10 +135,16 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         self.is_drawing = False
         self.is_erasing = False
         self.erase_radius = 5.0  # world-space radius for eraser (mm)
-        self.batch = None
-        self.shader = None
 
-        # Register viewport draw callback
+        # Raw line batch (orange)
+        self.batch_raw = None
+        self.shader_raw = None
+
+        # Live smoothed preview batch (cyan)
+        self.batch_smooth = None
+        self.shader_smooth = None
+
+        # Register viewport draw callback for this modal session
         self._draw_handle = bpy.types.SpaceView3D.draw_handler_add(
             self._draw_callback, (context,), 'WINDOW', 'POST_VIEW'
         )
@@ -84,7 +184,7 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
                 # Only add if far enough from last point (avoid clustering)
                 if not self.points or (hit - self.points[-1]).length > 1.0:
                     self.points.append(hit)
-                    self._rebuild_batch()
+                    self._rebuild_raw_batch()
 
         elif event.type == 'LEFTMOUSE':
             if event.value == 'PRESS' and event.ctrl:
@@ -97,10 +197,15 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
                 hit = self._raycast_mouse(context, event)
                 if hit is not None:
                     self.points.append(hit)
-                    self._rebuild_batch()
+                    self._rebuild_raw_batch()
             elif event.value == 'RELEASE':
+                was_drawing = self.is_drawing
+                was_erasing = self.is_erasing
                 self.is_drawing = False
                 self.is_erasing = False
+                # Update the smoothed preview on stroke end
+                if (was_drawing or was_erasing) and len(self.points) >= 4:
+                    self._rebuild_smooth_batch()
 
         elif event.type in {'RET', 'NUMPAD_ENTER'}:
             self._finish(context)
@@ -152,37 +257,65 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
             if (p - hit).length > self.erase_radius
         ]
         if len(self.points) != before:
-            self._rebuild_batch()
+            self._rebuild_raw_batch()
 
     # ------------------------------------------------------------------
     # Viewport drawing
     # ------------------------------------------------------------------
 
-    def _rebuild_batch(self):
-        """Rebuild the GPU batch for the current point list."""
+    def _rebuild_raw_batch(self):
+        """Rebuild the GPU batch for the raw drawn points (orange)."""
         if len(self.points) < 2:
-            self.batch = None
+            self.batch_raw = None
             return
         coords = [(p.x, p.y, p.z) for p in self.points]
-        self.shader = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
-        self.batch = batch_for_shader(
-            self.shader, 'LINE_STRIP', {"pos": coords}
+        self.shader_raw = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+        self.batch_raw = batch_for_shader(
+            self.shader_raw, 'LINE_STRIP', {"pos": coords}
+        )
+
+    def _rebuild_smooth_batch(self):
+        """Rebuild the GPU batch for the live smoothed preview (cyan)."""
+        if len(self.points) < 4:
+            self.batch_smooth = None
+            return
+
+        # Run the same smoothing pipeline as _finish
+        smoothed = self._smooth_points(self.points, resample_dist=2.0)
+        smoothed = self._reproject_to_surface(smoothed)
+
+        if len(smoothed) < 2:
+            self.batch_smooth = None
+            return
+
+        coords = [(p.x, p.y, p.z) for p in smoothed]
+        self.shader_smooth = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+        self.batch_smooth = batch_for_shader(
+            self.shader_smooth, 'LINE_STRIP', {"pos": coords}
         )
 
     def _draw_callback(self, context):
-        """Draw the hairline polyline in the viewport with depth testing."""
-        if self.batch is None or self.shader is None:
-            return
-        # Enable depth test so line is hidden behind the mesh
+        """Draw the raw line (orange) and smoothed preview (cyan) in the viewport."""
         gpu.state.depth_test_set('LESS_EQUAL')
         gpu.state.depth_mask_set(False)
 
-        self.shader.bind()
         region = context.region
-        self.shader.uniform_float("viewportSize", (region.width, region.height))
-        self.shader.uniform_float("lineWidth", 3.0)
-        self.shader.uniform_float("color", (1.0, 0.4, 0.0, 1.0))  # Orange
-        self.batch.draw(self.shader)
+
+        # Draw smoothed preview first (underneath) — cyan
+        if self.batch_smooth is not None and self.shader_smooth is not None:
+            self.shader_smooth.bind()
+            self.shader_smooth.uniform_float("viewportSize", (region.width, region.height))
+            self.shader_smooth.uniform_float("lineWidth", 5.0)
+            self.shader_smooth.uniform_float("color", (0.0, 0.9, 1.0, 0.8))  # Cyan
+            self.batch_smooth.draw(self.shader_smooth)
+
+        # Draw raw points on top — orange
+        if self.batch_raw is not None and self.shader_raw is not None:
+            self.shader_raw.bind()
+            self.shader_raw.uniform_float("viewportSize", (region.width, region.height))
+            self.shader_raw.uniform_float("lineWidth", 2.0)
+            self.shader_raw.uniform_float("color", (1.0, 0.4, 0.0, 1.0))  # Orange
+            self.batch_raw.draw(self.shader_raw)
 
         # Restore default state
         gpu.state.depth_test_set('NONE')
@@ -273,6 +406,7 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         1. Catmull-Rom spline + even resampling (2mm)
         2. Re-project onto mesh surface
         3. Store as JSON
+        4. Update persistent overlay
         """
         bpy.types.SpaceView3D.draw_handler_remove(self._draw_handle, 'WINDOW')
         context.area.header_text_set(None)
@@ -290,6 +424,9 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         # Store as JSON on scene property
         pts_list = [[p.x, p.y, p.z] for p in smoothed]
         context.scene.hwg.hairline_points_json = json.dumps(pts_list)
+
+        # Update the persistent green overlay to show the final line
+        refresh_persistent_overlay(context)
 
         self.report({'INFO'}, f"Hairline set: {len(smoothed)} points")
         context.area.tag_redraw()

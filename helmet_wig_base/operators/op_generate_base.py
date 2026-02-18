@@ -147,9 +147,11 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         if props.shell_mode == 'WIG_CAP' and hairline_json:
             hairline_pts = json.loads(hairline_json)
             min_hairline_z = min(p[2] for p in hairline_pts)
-            # Generous margin below lowest hairline point — the precise
+            # Small margin below lowest hairline point. Keep this tight
+            # (5mm) to prevent dome vertices from wrapping to the jaw/
+            # underside of the scan during Shrinkwrap. The precise
             # contour trim happens after Shrinkwrap.
-            dome_cut_z = min_hairline_z - 15.0
+            dome_cut_z = min_hairline_z - 5.0
             with bpy.context.temp_override(
                 object=dome, active_object=dome, selected_objects=[dome]
             ):
@@ -222,11 +224,22 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         if rim_height_mm > 0:
             self._add_rim_band(dome, rim_height_mm)
 
-        # --- Step 9: Final normals ---
+        # --- Step 9: Final cleanup + normals ---
         with bpy.context.temp_override(
             object=dome, active_object=dome, selected_objects=[dome]
         ):
             bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+
+            # Merge overlapping verts from Solidify edge artifacts
+            bpy.ops.mesh.remove_doubles(threshold=0.1)
+
+            # Clean up loose geometry
+            bpy.ops.mesh.select_all(action='DESELECT')
+            bpy.ops.mesh.select_loose()
+            bpy.ops.mesh.delete(type='VERT')
+
+            # Final normals
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -455,6 +468,44 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 return
 
             bmesh.ops.delete(bm, geom=verts_to_delete, context='VERTS')
+
+            # --- Step 4b: Keep only the largest connected component ---
+            # The barrier band around ears can create small disconnected
+            # islands. Flood-fill from the topmost remaining vertex to
+            # find the main shell, delete everything else.
+            bm.verts.ensure_lookup_table()
+            bm.edges.ensure_lookup_table()
+
+            if bm.verts:
+                crown2 = max(bm.verts, key=lambda v: (mat @ v.co).z)
+                main_component = set()
+                q2 = deque([crown2.index])
+                main_component.add(crown2.index)
+                while q2:
+                    vi = q2.popleft()
+                    for edge in bm.verts[vi].link_edges:
+                        oi = edge.other_vert(bm.verts[vi]).index
+                        if oi not in main_component:
+                            main_component.add(oi)
+                            q2.append(oi)
+
+                fragments = [v for v in bm.verts if v.index not in main_component]
+                if fragments:
+                    bmesh.ops.delete(bm, geom=fragments, context='VERTS')
+
+            # --- Step 4c: Basic cleanup ---
+            bm.verts.ensure_lookup_table()
+            loose_verts = [v for v in bm.verts if not v.link_faces]
+            if loose_verts:
+                bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
+
+            bm.edges.ensure_lookup_table()
+            loose_edges = [e for e in bm.edges if not e.link_faces]
+            if loose_edges:
+                bmesh.ops.delete(bm, geom=loose_edges, context='EDGES')
+
+            bm.verts.ensure_lookup_table()
+            bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=0.3)
 
             bmesh.update_edit_mesh(obj.data)
             bpy.ops.object.mode_set(mode='OBJECT')

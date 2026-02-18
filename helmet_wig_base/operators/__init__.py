@@ -17,9 +17,13 @@ def register():
     import bpy
     for c in classes:
         bpy.utils.register_class(c)
+    # Register persistent hairline overlay (green line always visible)
+    op_draw_hairline.register_persistent_overlay()
 
 
 def unregister():
     import bpy
+    # Unregister persistent hairline overlay
+    op_draw_hairline.unregister_persistent_overlay()
     for c in reversed(classes):
         bpy.utils.unregister_class(c)
