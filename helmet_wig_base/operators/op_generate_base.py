@@ -129,17 +129,16 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Step 4: Shrinkwrap onto trimmed scan ---
-        # Shrinkwrap offset is in Blender units, which are affected by
-        # scene unit scale. Divide by unit_scale to get actual mm.
+        # All values are in Blender units, which should be mm after
+        # the import operator scales the scan. If the scan bbox is in
+        # the 15-25 range, it's likely in cm — warn the user.
         clearance_mm = props.clearance_mm
-        unit_scale = context.scene.unit_settings.scale_length
-        shrink_offset = clearance_mm / unit_scale
 
         mod_shrink = dome.modifiers.new("HWG_Shrinkwrap", 'SHRINKWRAP')
         mod_shrink.wrap_method = 'NEAREST_SURFACEPOINT'
         mod_shrink.wrap_mode = 'OUTSIDE_SURFACE'
         mod_shrink.target = target
-        mod_shrink.offset = shrink_offset
+        mod_shrink.offset = clearance_mm
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_shrink.name)
 
@@ -150,21 +149,11 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         with bpy.context.temp_override(object=dome, active_object=dome):
             bpy.ops.object.modifier_apply(modifier=mod_smooth2.name)
 
-        # --- Debug: measure bounding box before solidify ---
-        bbox_pre = [dome.matrix_world @ Vector(c) for c in dome.bound_box]
-        x_pre = max(v.x for v in bbox_pre) - min(v.x for v in bbox_pre)
-        y_pre = max(v.y for v in bbox_pre) - min(v.y for v in bbox_pre)
-        z_pre = max(v.z for v in bbox_pre) - min(v.z for v in bbox_pre)
-
         # --- Step 6: Solidify ---
-        # Check Blender scene unit scale — if not 1.0, thickness must
-        # be divided by it since Solidify works in Blender units.
         thickness_mm = props.thickness_mm
-        unit_scale = context.scene.unit_settings.scale_length
-        solidify_thickness = thickness_mm / unit_scale
 
         mod_shell = dome.modifiers.new("HWG_Shell", 'SOLIDIFY')
-        mod_shell.thickness = solidify_thickness
+        mod_shell.thickness = thickness_mm
         mod_shell.offset = -1.0  # grow outward
         mod_shell.use_rim = True
         mod_shell.use_rim_only = False
@@ -193,13 +182,25 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         dome.select_set(True)
         context.view_layer.objects.active = dome
 
+        # Warn if scan appears to be in wrong units
+        bbox_check = [dome.matrix_world @ Vector(c) for c in dome.bound_box]
+        max_dim = max(
+            max(v.x for v in bbox_check) - min(v.x for v in bbox_check),
+            max(v.y for v in bbox_check) - min(v.y for v in bbox_check),
+            max(v.z for v in bbox_check) - min(v.z for v in bbox_check),
+        )
+        if max_dim < 50:
+            self.report(
+                {'WARNING'},
+                f"Shell is only {max_dim:.1f} units wide — scan may be in cm, not mm. "
+                f"Try reimporting with Scan Units set to Centimeters.",
+            )
+
         vert_count = len(dome.data.vertices)
         self.report(
             {'INFO'},
             f"Generated: {dome.name} ({vert_count:,} verts, "
-            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm, "
-            f"unit_scale={unit_scale}, "
-            f"pre-solidify bbox: {x_pre:.1f}x{y_pre:.1f}x{z_pre:.1f})",
+            f"clearance={clearance_mm}mm, thickness={thickness_mm}mm)",
         )
         return {'FINISHED'}
 

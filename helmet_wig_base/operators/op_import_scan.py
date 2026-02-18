@@ -99,8 +99,13 @@ class HWG_OT_ImportScan(bpy.types.Operator):
         base_name = os.path.splitext(os.path.basename(filepath))[0]
         scan_obj.name = f"{base_name}_SCAN"
 
-        # Apply scale from scan units (ARKit/Polycam export in meters)
-        unit_scale = 1000.0 if props.scan_units == 'M' else 1.0
+        # Apply scale from scan units to convert to mm (working units)
+        if props.scan_units == 'M':
+            unit_scale = 1000.0  # meters → mm
+        elif props.scan_units == 'CM':
+            unit_scale = 10.0    # centimeters → mm
+        else:
+            unit_scale = 1.0     # already mm
         total_scale = unit_scale * props.scale_factor
 
         if abs(total_scale - 1.0) > 0.0001:
