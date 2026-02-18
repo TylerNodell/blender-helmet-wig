@@ -2,7 +2,9 @@
 
 Pipeline (Shrinkwrap approach):
 1. Prepare scan target: clean, fill holes, voxel remesh, smooth
-2. Bisect the scan target to remove neck/shoulders
+2. Trim the scan target:
+   - HELMET mode: flat bisect at edge_ratio height
+   - WIG_CAP mode: per-vertex trim along user-drawn hairline contour
 3. Create a UV sphere dome sized to the trimmed head
 4. Shrinkwrap the dome onto the trimmed scan (OUTSIDE + clearance)
 5. Smooth to clean up Shrinkwrap artifacts
@@ -16,6 +18,7 @@ projects it onto the scan, avoiding all issues with scan mesh quality.
 
 import bpy
 import bmesh
+import json
 import math
 from mathutils import Vector
 
@@ -32,7 +35,14 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         scan = props.scan_object
 
         if not scan or scan.type != 'MESH':
-            self.report({'ERROR'}, "Select a scan mesh object first.")
+            self.report({'ERROR'}, "Set a scan mesh object first.")
+            return {'CANCELLED'}
+
+        if props.shell_mode == 'WIG_CAP' and not props.hairline_points_json:
+            self.report(
+                {'ERROR'},
+                "Draw a hairline first (Draw Hairline button) or switch to Helmet mode.",
+            )
             return {'CANCELLED'}
 
         # --- Step 1: Prepare clean scan target ---
@@ -61,28 +71,31 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         with bpy.context.temp_override(object=target, active_object=target):
             bpy.ops.object.modifier_apply(modifier=mod_smooth.name)
 
-        # --- Step 2: Bisect the scan target to remove neck/shoulders ---
-        # Compute edge_z from the FULL scan bounding box, then cut
-        # the target so Shrinkwrap only sees the head portion.
+        # --- Step 2: Trim the scan target ---
         bbox_full = [target.matrix_world @ Vector(c) for c in target.bound_box]
         z_min_full = min(v.z for v in bbox_full)
         z_max_full = max(v.z for v in bbox_full)
         height_full = max(0.001, z_max_full - z_min_full)
-        edge_z = z_min_full + height_full * props.edge_ratio
 
-        with bpy.context.temp_override(
-            object=target, active_object=target, selected_objects=[target]
-        ):
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.bisect(
-                plane_co=(0, 0, edge_z),
-                plane_no=(0, 0, 1),
-                clear_inner=True,
-                clear_outer=False,
-                use_fill=True,  # fill the cut so it's watertight for Shrinkwrap
-            )
-            bpy.ops.object.mode_set(mode='OBJECT')
+        if props.shell_mode == 'WIG_CAP' and props.hairline_points_json:
+            # Contoured trim along user-drawn hairline
+            self._hairline_trim(target, props.hairline_points_json)
+        else:
+            # Flat bisect at edge_ratio height (HELMET mode or no hairline)
+            edge_z = z_min_full + height_full * props.edge_ratio
+            with bpy.context.temp_override(
+                object=target, active_object=target, selected_objects=[target]
+            ):
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.bisect(
+                    plane_co=(0, 0, edge_z),
+                    plane_no=(0, 0, 1),
+                    clear_inner=True,
+                    clear_outer=False,
+                    use_fill=True,
+                )
+                bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Step 3: Create UV sphere dome sized to the trimmed head ---
         bbox = [target.matrix_world @ Vector(c) for c in target.bound_box]
@@ -113,20 +126,24 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
         dome = context.active_object
         dome.name = f"{scan.name}_HELMET_BASE"
 
-        # Bisect the dome at the same height
-        with bpy.context.temp_override(
-            object=dome, active_object=dome, selected_objects=[dome]
-        ):
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.bisect(
-                plane_co=(0, 0, edge_z),
-                plane_no=(0, 0, 1),
-                clear_inner=True,
-                clear_outer=False,
-                use_fill=False,  # leave open for shell
-            )
-            bpy.ops.object.mode_set(mode='OBJECT')
+        # Trim the dome at the same contour
+        if props.shell_mode == 'WIG_CAP' and props.hairline_points_json:
+            self._hairline_trim(dome, props.hairline_points_json, fill=False)
+        else:
+            edge_z = z_min_full + height_full * props.edge_ratio
+            with bpy.context.temp_override(
+                object=dome, active_object=dome, selected_objects=[dome]
+            ):
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.bisect(
+                    plane_co=(0, 0, edge_z),
+                    plane_no=(0, 0, 1),
+                    clear_inner=True,
+                    clear_outer=False,
+                    use_fill=False,  # leave open for shell
+                )
+                bpy.ops.object.mode_set(mode='OBJECT')
 
         # --- Step 4: Shrinkwrap onto trimmed scan ---
         # All values are in Blender units, which should be mm after
@@ -236,6 +253,107 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                 use_multi_face=False, use_non_contiguous=False, use_verts=False,
             )
             bpy.ops.mesh.fill_holes(sides=0)
+
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+    def _hairline_trim(self, obj, hairline_json, fill=True):
+        """Trim a mesh along a user-drawn hairline contour.
+
+        Converts the hairline points to polar angle → Z height mapping,
+        then deletes all vertices below their corresponding hairline Z.
+
+        Args:
+            obj: Blender mesh object to trim.
+            hairline_json: JSON string of [[x,y,z], ...] hairline points.
+            fill: If True, fill boundary holes after trimming.
+        """
+        pts_raw = json.loads(hairline_json)
+        if len(pts_raw) < 3:
+            return
+
+        hairline = [Vector(p) for p in pts_raw]
+
+        # Compute center XY from the hairline points themselves
+        cx = sum(p.x for p in hairline) / len(hairline)
+        cy = sum(p.y for p in hairline) / len(hairline)
+
+        # Build angle → Z mapping from hairline points
+        angle_z = []
+        for p in hairline:
+            angle = math.atan2(p.y - cy, p.x - cx)
+            angle_z.append((angle, p.z))
+        # Sort by angle for interpolation
+        angle_z.sort(key=lambda a: a[0])
+
+        def hairline_z_at_angle(theta):
+            """Interpolate the hairline Z value at a given angle."""
+            n = len(angle_z)
+            if n == 0:
+                return 0.0
+
+            # Wrap theta into [-pi, pi]
+            while theta > math.pi:
+                theta -= 2 * math.pi
+            while theta < -math.pi:
+                theta += 2 * math.pi
+
+            # Find the two bracketing samples
+            for i in range(n):
+                if angle_z[i][0] >= theta:
+                    break
+            else:
+                i = 0  # wrap around
+
+            i1 = i
+            i0 = (i - 1) % n
+
+            a0, z0 = angle_z[i0]
+            a1, z1 = angle_z[i1]
+
+            # Handle wrap-around
+            da = a1 - a0
+            if da < 0:
+                da += 2 * math.pi
+            dt = theta - a0
+            if dt < 0:
+                dt += 2 * math.pi
+
+            if abs(da) < 1e-8:
+                return z0
+
+            t = dt / da
+            return z0 + (z1 - z0) * t
+
+        # Delete vertices below the hairline contour using bmesh
+        with bpy.context.temp_override(
+            object=obj, active_object=obj, selected_objects=[obj]
+        ):
+            bpy.ops.object.mode_set(mode='EDIT')
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.verts.ensure_lookup_table()
+
+            verts_to_delete = []
+            for v in bm.verts:
+                world_co = obj.matrix_world @ v.co
+                angle = math.atan2(world_co.y - cy, world_co.x - cx)
+                threshold_z = hairline_z_at_angle(angle)
+                if world_co.z < threshold_z:
+                    verts_to_delete.append(v)
+
+            if verts_to_delete:
+                bmesh.ops.delete(bm, geom=verts_to_delete, context='VERTS')
+
+            bmesh.update_edit_mesh(obj.data)
+
+            if fill:
+                # Fill boundary holes to make watertight for Shrinkwrap
+                bpy.ops.mesh.select_all(action='DESELECT')
+                bpy.ops.mesh.select_non_manifold(
+                    extend=False, use_wire=False, use_boundary=True,
+                    use_multi_face=False, use_non_contiguous=False,
+                    use_verts=False,
+                )
+                bpy.ops.mesh.fill_holes(sides=0)
 
             bpy.ops.object.mode_set(mode='OBJECT')
 

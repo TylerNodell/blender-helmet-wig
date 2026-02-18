@@ -60,24 +60,35 @@ class HWG_OT_ExportSTL(bpy.types.Operator):
         json_path = os.path.join(export_dir, f"helmet_base_{timestamp}.json")
         bbox = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
 
+        # Build parameters dict based on shell mode
+        params = {
+            "shellMode": props.shell_mode,
+            "scanUnits": props.scan_units,
+            "scaleFactor": props.scale_factor,
+            "clearanceMm": props.clearance_mm,
+            "thicknessMm": props.thickness_mm,
+            "rimHeightMm": props.rim_height_mm,
+            "ventsEnabled": props.vents_enabled,
+            "ventPattern": props.vent_pattern,
+            "ventRadiusMm": props.vent_radius_mm,
+            "ventSpacingMm": props.vent_spacing_mm,
+        }
+        if props.shell_mode == 'WIG_CAP' and props.hairline_points_json:
+            try:
+                pts = json.loads(props.hairline_points_json)
+                params["hairlinePointCount"] = len(pts)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            params["edgeRatio"] = props.edge_ratio
+
         sidecar = {
             "version": "1.0.0",
             "exportTimestamp": datetime.now().isoformat(),
             "units": "mm",
             "sourceObject": obj.name,
             "scanObject": props.scan_object.name if props.scan_object else None,
-            "parameters": {
-                "scanUnits": props.scan_units,
-                "scaleFactor": props.scale_factor,
-                "clearanceMm": props.clearance_mm,
-                "thicknessMm": props.thickness_mm,
-                "edgeRatio": props.edge_ratio,
-                "rimHeightMm": props.rim_height_mm,
-                "ventsEnabled": props.vents_enabled,
-                "ventPattern": props.vent_pattern,
-                "ventRadiusMm": props.vent_radius_mm,
-                "ventSpacingMm": props.vent_spacing_mm,
-            },
+            "parameters": params,
             "boundingBox": {
                 "minMm": [
                     min(v.x for v in bbox),

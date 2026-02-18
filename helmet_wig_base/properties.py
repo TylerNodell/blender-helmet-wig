@@ -39,7 +39,26 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
         max=100.0,
     )
 
-    # --- Crop ---
+    # --- Shell Mode ---
+    shell_mode: EnumProperty(
+        name="Shell Mode",
+        description="Type of shell to generate",
+        items=[
+            ('HELMET', "Helmet", "Full helmet with flat horizontal edge cut"),
+            ('WIG_CAP', "Wig Cap", "Wig cap shaped by a user-drawn hairline"),
+        ],
+        default='WIG_CAP',
+    )
+
+    # --- Hairline (WIG_CAP mode) ---
+    hairline_points_json: StringProperty(
+        name="Hairline Points",
+        description="JSON-encoded list of [x,y,z] hairline points (internal)",
+        default="",
+        options={'HIDDEN'},
+    )
+
+    # --- Crop (HELMET mode) ---
     edge_ratio: FloatProperty(
         name="Edge Ratio",
         description="Bottom cut height as fraction of scan height (0.45 = cut bottom 45%, keeping top 55% as helmet)",

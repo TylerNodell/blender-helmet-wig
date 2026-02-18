@@ -53,9 +53,36 @@ class HWG_PT_Base(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
 
+        layout.prop(props, "shell_mode")
+
+        layout.separator()
+
+        if props.shell_mode == 'WIG_CAP':
+            # Draw hairline button + status
+            row = layout.row(align=True)
+            row.scale_y = 1.3
+            row.operator("hwg.draw_hairline", icon='GREASEPENCIL')
+
+            if props.hairline_points_json:
+                import json
+                try:
+                    pts = json.loads(props.hairline_points_json)
+                    layout.label(
+                        text=f"Hairline: {len(pts)} points",
+                        icon='CHECKMARK',
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    layout.label(text="Hairline: invalid data", icon='ERROR')
+            else:
+                layout.label(text="No hairline drawn", icon='INFO')
+
+            layout.separator()
+        else:
+            # HELMET mode: flat edge ratio
+            layout.prop(props, "edge_ratio")
+
         layout.prop(props, "clearance_mm")
         layout.prop(props, "thickness_mm")
-        layout.prop(props, "edge_ratio")
         layout.prop(props, "rim_height_mm")
 
         layout.separator()

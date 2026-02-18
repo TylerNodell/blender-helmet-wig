@@ -1,10 +1,12 @@
 from . import op_import_scan
+from . import op_draw_hairline
 from . import op_generate_base
 from . import op_add_vents
 from . import op_export_stl
 
 classes = (
     op_import_scan.HWG_OT_ImportScan,
+    op_draw_hairline.HWG_OT_DrawHairline,
     op_generate_base.HWG_OT_GenerateBase,
     op_add_vents.HWG_OT_AddVents,
     op_export_stl.HWG_OT_ExportSTL,
