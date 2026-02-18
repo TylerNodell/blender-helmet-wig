@@ -9,8 +9,8 @@
     "edgeRatio": 0.45
   },
   "base": {
-    "clearanceMm": 2.0,
-    "thicknessMm": 2.8,
+    "clearanceMm": 3.5,
+    "thicknessMm": 2.5,
     "rimHeightMm": 0.0
   },
   "vents": {

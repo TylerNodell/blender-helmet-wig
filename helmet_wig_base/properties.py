@@ -70,15 +70,15 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     # --- Base ---
     clearance_mm: FloatProperty(
         name="Clearance (mm)",
-        description="Outward offset from scan surface for foam liner + comfort (2mm for 2mm EVA foam)",
-        default=2.0,
+        description="Outward offset from scan surface for foam liner + comfort",
+        default=3.5,
         min=0.0,
         max=20.0,
     )
     thickness_mm: FloatProperty(
         name="Shell Thickness (mm)",
         description="Wall thickness of the PETG shell",
-        default=2.8,
+        default=2.5,
         min=0.5,
         max=10.0,
     )

@@ -39,6 +39,8 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
 
         self.points = []  # raw 3D points on mesh surface (world space)
         self.is_drawing = False
+        self.is_erasing = False
+        self.erase_radius = 5.0  # world-space radius for eraser (mm)
         self.batch = None
         self.shader = None
 
@@ -50,7 +52,7 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
 
         # Show header instructions
         context.area.header_text_set(
-            "Draw Hairline: LMB drag to draw | Enter to confirm | Esc to cancel"
+            "Draw Hairline: LMB draw | Ctrl+LMB erase | Enter confirm | Esc cancel"
         )
         return {'RUNNING_MODAL'}
 
@@ -69,11 +71,14 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         if event.type in self._nav_events:
             return {'PASS_THROUGH'}
 
-        # Shift/Ctrl + MMB (pan/zoom) also needs passthrough on modifier keys
-        if event.type == 'MOUSEMOVE' and not self.is_drawing:
+        # Pass through mouse movement when not drawing or erasing
+        if event.type == 'MOUSEMOVE' and not self.is_drawing and not self.is_erasing:
             return {'PASS_THROUGH'}
 
-        if event.type == 'MOUSEMOVE' and self.is_drawing:
+        if event.type == 'MOUSEMOVE' and self.is_erasing:
+            self._erase_at_mouse(context, event)
+
+        elif event.type == 'MOUSEMOVE' and self.is_drawing:
             hit = self._raycast_mouse(context, event)
             if hit is not None:
                 # Only add if far enough from last point (avoid clustering)
@@ -82,7 +87,12 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
                     self._rebuild_batch()
 
         elif event.type == 'LEFTMOUSE':
-            if event.value == 'PRESS':
+            if event.value == 'PRESS' and event.ctrl:
+                # Ctrl+LMB = erase mode
+                self.is_erasing = True
+                self._erase_at_mouse(context, event)
+            elif event.value == 'PRESS':
+                # LMB = draw mode
                 self.is_drawing = True
                 hit = self._raycast_mouse(context, event)
                 if hit is not None:
@@ -90,6 +100,7 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
                     self._rebuild_batch()
             elif event.value == 'RELEASE':
                 self.is_drawing = False
+                self.is_erasing = False
 
         elif event.type in {'RET', 'NUMPAD_ENTER'}:
             self._finish(context)
@@ -126,6 +137,24 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         return None
 
     # ------------------------------------------------------------------
+    # Erasing
+    # ------------------------------------------------------------------
+
+    def _erase_at_mouse(self, context, event):
+        """Remove points near the mouse cursor on the mesh surface."""
+        hit = self._raycast_mouse(context, event)
+        if hit is None or not self.points:
+            return
+
+        before = len(self.points)
+        self.points = [
+            p for p in self.points
+            if (p - hit).length > self.erase_radius
+        ]
+        if len(self.points) != before:
+            self._rebuild_batch()
+
+    # ------------------------------------------------------------------
     # Viewport drawing
     # ------------------------------------------------------------------
 
@@ -141,15 +170,23 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         )
 
     def _draw_callback(self, context):
-        """Draw the hairline polyline in the viewport."""
+        """Draw the hairline polyline in the viewport with depth testing."""
         if self.batch is None or self.shader is None:
             return
+        # Enable depth test so line is hidden behind the mesh
+        gpu.state.depth_test_set('LESS_EQUAL')
+        gpu.state.depth_mask_set(False)
+
         self.shader.bind()
         region = context.region
         self.shader.uniform_float("viewportSize", (region.width, region.height))
         self.shader.uniform_float("lineWidth", 3.0)
         self.shader.uniform_float("color", (1.0, 0.4, 0.0, 1.0))  # Orange
         self.batch.draw(self.shader)
+
+        # Restore default state
+        gpu.state.depth_test_set('NONE')
+        gpu.state.depth_mask_set(True)
 
     # ------------------------------------------------------------------
     # Smoothing
@@ -230,7 +267,13 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
     # ------------------------------------------------------------------
 
     def _finish(self, context):
-        """Smooth the drawn points, store them, and clean up."""
+        """Smooth the drawn points, store them, and clean up.
+
+        Pipeline:
+        1. Catmull-Rom spline + even resampling (2mm)
+        2. Re-project onto mesh surface
+        3. Store as JSON
+        """
         bpy.types.SpaceView3D.draw_handler_remove(self._draw_handle, 'WINDOW')
         context.area.header_text_set(None)
 
@@ -238,10 +281,10 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
             self.report({'WARNING'}, "Not enough points drawn. Draw a longer line.")
             return
 
-        # Smooth and resample
-        smoothed = self._smooth_points(self.points)
+        # Pass 1: Catmull-Rom spline + even resampling
+        smoothed = self._smooth_points(self.points, resample_dist=2.0)
 
-        # Re-project onto mesh surface
+        # Pass 2: Re-project onto mesh surface
         smoothed = self._reproject_to_surface(smoothed)
 
         # Store as JSON on scene property
