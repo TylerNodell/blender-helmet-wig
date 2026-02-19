@@ -40,21 +40,24 @@ class HWG_SceneProps(bpy.types.PropertyGroup):
     )
 
     # --- Shell Mode ---
+    # HELMET mode disabled — project is focused on wig cap generation.
     shell_mode: EnumProperty(
         name="Shell Mode",
         description="Type of shell to generate",
         items=[
-            ('HELMET', "Helmet", "Full helmet with flat horizontal edge cut"),
             ('WIG_CAP', "Wig Cap", "Wig cap shaped by a user-drawn hairline"),
         ],
         default='WIG_CAP',
     )
 
     # --- Hairline (WIG_CAP mode) ---
+    # maxlen must be large enough for ~300+ points × ~140 chars each.
+    # Blender's default StringProperty maxlen is 1024, far too small.
     hairline_points_json: StringProperty(
         name="Hairline Points",
         description="JSON-encoded list of [x,y,z] hairline points (internal)",
         default="",
+        maxlen=262144,  # 256 KB — enough for thousands of hairline points
         options={'HIDDEN'},
     )
 

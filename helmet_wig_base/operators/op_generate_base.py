@@ -475,9 +475,15 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
                     if dist < barrier_radius:
                         barrier.add(v.index)
 
+            print(f"  [HWG] _hairline_trim({obj.name}): "
+                  f"{len(hairline)} hairline pts, "
+                  f"{len(bm.verts)} mesh verts, "
+                  f"barrier_radius={barrier_radius}mm, "
+                  f"barrier_verts={len(barrier)}")
+
             if not barrier:
-                # No barrier found — hairline points too far from mesh.
-                # Skip trimming entirely.
+                print("  [HWG] _hairline_trim: WARNING — no barrier found! "
+                      "Hairline too far from mesh. Skipping trim.")
                 bmesh.update_edit_mesh(obj.data)
                 bpy.ops.object.mode_set(mode='OBJECT')
                 return
@@ -509,8 +515,12 @@ class HWG_OT_GenerateBase(bpy.types.Operator):
             # --- Step 4: Delete everything not reached ---
             verts_to_delete = [v for v in bm.verts if v.index not in keep]
 
+            print(f"  [HWG] _hairline_trim: keep={len(keep)}, "
+                  f"delete={len(verts_to_delete)}")
+
             if not verts_to_delete:
-                # Nothing to trim
+                print("  [HWG] _hairline_trim: nothing to delete — "
+                      "flood fill reached all verts.")
                 bmesh.update_edit_mesh(obj.data)
                 bpy.ops.object.mode_set(mode='OBJECT')
                 return

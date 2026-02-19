@@ -444,24 +444,132 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
         context.area.tag_redraw()
 
     def _auto_save_fixture(self, context, hairline_json):
-        """Save hairline JSON to tests/fixtures/ for automated testing."""
+        """Save hairline JSON to tests/fixtures/ for automated testing.
+
+        The fixture filename uses the HEAD MODEL filename (not the Blender
+        object name) so it matches what run_test.bat expects:
+          hairline_<ModelFilenameWithoutExt>_<N>.json
+
+        Tries multiple strategies to locate the repo's tests/fixtures/:
+        1. Walk up from __file__
+        2. Walk up from the .blend file path
+        3. Direct check of known repo path (helmet_wig_base package)
+        If all fail, saves to ~/Documents/hwg_hairlines/ as fallback.
+        """
         import os
 
-        # Find the repo root (parent of helmet_wig_base/)
-        addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        repo_root = os.path.dirname(addon_dir)
-        fixtures_dir = os.path.join(repo_root, "tests", "fixtures")
+        def _find_repo_root(start_path):
+            """Walk up from start_path looking for repo markers."""
+            candidate = os.path.abspath(start_path)
+            for _ in range(10):
+                candidate = os.path.dirname(candidate)
+                if not candidate or candidate == os.path.dirname(candidate):
+                    break  # reached filesystem root
+                if os.path.isdir(os.path.join(candidate, ".git")) or \
+                   os.path.isfile(os.path.join(candidate, "test_harness.py")):
+                    return candidate
+            return None
 
-        # Create fixtures dir if needed
+        # Strategy 1: Walk up from this Python file
+        repo_root = _find_repo_root(__file__)
+        print(f"[HWG] Auto-save: __file__ = {os.path.abspath(__file__)}")
+        print(f"[HWG] Auto-save: Strategy 1 (from __file__): {repo_root}")
+
+        # Strategy 2: Walk up from the .blend file location
+        if repo_root is None:
+            blend_path = bpy.data.filepath
+            if blend_path:
+                repo_root = _find_repo_root(blend_path)
+                print(f"[HWG] Auto-save: Strategy 2 (from .blend): {repo_root}")
+
+        # Strategy 3: Check the addon's package path via bpy.utils
+        if repo_root is None:
+            try:
+                import helmet_wig_base
+                pkg_path = os.path.dirname(
+                    os.path.abspath(helmet_wig_base.__file__)
+                )
+                repo_root = _find_repo_root(pkg_path)
+                print(f"[HWG] Auto-save: Strategy 3 (package): "
+                      f"{pkg_path} -> {repo_root}")
+            except Exception:
+                pass
+
+        # Strategy 4: Look in common GitHub directories
+        if repo_root is None:
+            home = os.path.expanduser("~")
+            for candidate_dir in [
+                os.path.join(home, "Documents", "GitHub",
+                             "blender-helmet-wig"),
+                os.path.join(home, "GitHub", "blender-helmet-wig"),
+                os.path.join(home, "repos", "blender-helmet-wig"),
+                os.path.join(home, "Desktop", "blender-helmet-wig"),
+            ]:
+                if os.path.isdir(os.path.join(candidate_dir, ".git")) or \
+                   os.path.isfile(os.path.join(candidate_dir,
+                                               "test_harness.py")):
+                    repo_root = candidate_dir
+                    print(f"[HWG] Auto-save: Strategy 4 (known path): "
+                          f"{repo_root}")
+                    break
+
+        # Determine save directory
+        if repo_root is not None:
+            fixtures_dir = os.path.join(repo_root, "tests", "fixtures")
+        else:
+            blend_dir = (os.path.dirname(bpy.data.filepath)
+                         if bpy.data.filepath else None)
+            if blend_dir:
+                fixtures_dir = os.path.join(blend_dir, "hwg_hairlines")
+            else:
+                fixtures_dir = os.path.join(os.path.expanduser("~"),
+                                            "Documents", "hwg_hairlines")
+            print(f"[HWG] Auto-save: FALLBACK -> {fixtures_dir}")
+            self.report(
+                {'WARNING'},
+                f"Repo not found. Saving hairline to: {fixtures_dir}",
+            )
+
         os.makedirs(fixtures_dir, exist_ok=True)
 
-        # Get scan object name for the filename
+        # --- Build filename from the HEAD MODEL file, not the object name ---
+        # run_test.bat globs: hairline_<ModelFilenameNoExt>_*.json
+        # so we must use the same base name as the .obj/.stl file.
         scan_name = "unknown"
         props = context.scene.hwg
         if props.scan_object:
-            # Clean the name for use in a filename
-            scan_name = props.scan_object.name
-            scan_name = scan_name.replace(" ", "_").replace(".", "_")
+            # Try to get the original import filename from the mesh data
+            # Blender stores the source filepath on mesh.library or we can
+            # match against fixture files in the directory.
+            obj_name = props.scan_object.name
+
+            # Check if the model file exists in fixtures_dir to get the
+            # exact filename stem (handles .obj, .stl, etc.)
+            matched_stem = None
+            if os.path.isdir(fixtures_dir):
+                for f in os.listdir(fixtures_dir):
+                    stem, ext = os.path.splitext(f)
+                    if ext.lower() in ('.obj', '.stl', '.fbx', '.ply'):
+                        # Check if the object name starts with the file stem
+                        clean_obj = obj_name.replace(" ", "_").replace(".", "_")
+                        clean_stem = stem.replace(" ", "_").replace(".", "_")
+                        if clean_obj.startswith(clean_stem):
+                            matched_stem = stem
+                            break
+
+            if matched_stem:
+                scan_name = matched_stem.replace(" ", "_").replace(".", "_")
+                print(f"[HWG] Auto-save: matched model file '{matched_stem}'"
+                      f" for object '{obj_name}'")
+            else:
+                # Fallback: use object name, strip common suffixes
+                scan_name = obj_name
+                for suffix in ('_SCAN', '_scan', '.001', '.002', '.003'):
+                    if scan_name.endswith(suffix):
+                        scan_name = scan_name[:-len(suffix)]
+                scan_name = scan_name.replace(" ", "_").replace(".", "_")
+                print(f"[HWG] Auto-save: using object name '{scan_name}' "
+                      f"(from '{obj_name}')")
 
         # Find next available number
         n = 1
@@ -473,18 +581,15 @@ class HWG_OT_DrawHairline(bpy.types.Operator):
             n += 1
 
         # Save
+        print(f"[HWG] Auto-save: saving {filepath}")
         try:
             with open(filepath, "w") as f:
                 f.write(hairline_json)
-            self.report(
-                {'INFO'},
-                f"Hairline saved: {filename}",
-            )
+            self.report({'INFO'}, f"Hairline saved: {filepath}")
+            print(f"[HWG] Auto-save: SUCCESS")
         except (IOError, OSError) as e:
-            self.report(
-                {'WARNING'},
-                f"Could not auto-save hairline fixture: {e}",
-            )
+            self.report({'WARNING'}, f"Could not save hairline: {e}")
+            print(f"[HWG] Auto-save: FAILED — {e}")
 
     def _cancel(self, context):
         """Discard drawn points and clean up."""
